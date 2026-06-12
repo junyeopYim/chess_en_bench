@@ -484,3 +484,172 @@ def test_bench_candidate_suppressing_nps_fails(monkeypatch):
     assert rep["supported"] is True              # baseline is the reference
     assert rep["candidate_bench_missing"] is True
     assert rep["passed"] is False
+
+
+# ----- v0.3.4 audit: bench override never preserves verified -------------------
+
+def _stub_build_and_match(monkeypatch, tmp_path):
+    import ceb.track_b.official_pipeline as op
+    eng = tmp_path / "eng"
+    eng.write_text("#!/bin/sh\n")
+    eng.chmod(0o755)
+    monkeypatch.setattr("ceb.track_b.build_jail.build_in_jail",
+                        lambda *a, **k: eng)
+    monkeypatch.setattr(op, "run_track_b_round", lambda *a, **k: (
+        {"score": {"delta_elo": 0.0, "final_delta_elo": 0.0, "games": 2,
+                   "wins": 1, "draws": 0, "losses": 1, "faults": {},
+                   "delta_elo_ci95": [-1, 1], "penalty_points": 0},
+         "eval_pack": {"name": "x"}, "openings_used": []},
+        {"schema": "fb"}))
+    return op
+
+
+def test_bench_failure_without_override_fails(tmp_path, monkeypatch):
+    from ceb.hosted.build_wrappers import write_demo_wrapper
+    op = _stub_build_and_match(monkeypatch, tmp_path)
+    monkeypatch.setattr(op, "_run_bench", lambda *a, **k: {
+        "schema": "b", "supported": True, "passed": False, "nps_ratio": 0.1,
+        "min_nps_ratio": 0.3, "baseline": {}, "candidate": {}})
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    wrapper = write_demo_wrapper(tmp_path / "w.sh")
+    with pytest.raises(TrackBPipelineError, match="bench"):
+        run_official_track_b(
+            candidate_src=cand, baseline_src=base, verified=True,
+            build_isolation="jail", build_wrapper=str(wrapper),
+            eval_pack_dir=str(TINY_PACK), run_id="x",
+            runs_root=tmp_path / "runs", root=REPO_ROOT, games=2,
+            verification_grade="verified-official", allow_no_bench=False)
+
+
+def test_bench_failure_with_override_is_diagnostic(tmp_path, monkeypatch):
+    from ceb.hosted.build_wrappers import write_demo_wrapper
+    op = _stub_build_and_match(monkeypatch, tmp_path)
+    monkeypatch.setattr(op, "_run_bench", lambda *a, **k: {
+        "schema": "b", "supported": True, "passed": False, "nps_ratio": 0.1,
+        "min_nps_ratio": 0.3, "baseline": {}, "candidate": {}})
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    wrapper = write_demo_wrapper(tmp_path / "w.sh")
+    report = run_official_track_b(
+        candidate_src=cand, baseline_src=base, verified=True,
+        build_isolation="jail", build_wrapper=str(wrapper),
+        eval_pack_dir=str(TINY_PACK), run_id="x", runs_root=tmp_path / "runs",
+        root=REPO_ROOT, games=2, verification_grade="verified-official",
+        allow_no_bench=True)
+    assert report["verified"] is False          # override NEVER keeps verified
+    assert report["verification_grade"] == "diagnostic-no-bench"
+
+
+def _git_init_commit(tree):
+    import subprocess, os
+    e = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    tree.mkdir(parents=True, exist_ok=True)
+    (tree / "src.cpp").write_text("int x;\n")
+    subprocess.run(["git", "init", "-q", str(tree)], check=True)
+    subprocess.run(["git", "-C", str(tree), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tree), "commit", "-q", "-m", "x"], check=True, env=e)
+    head = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    return head
+
+
+def test_baseline_stockfish_lock_requires_clean_worktree(tmp_path, monkeypatch):
+    import ceb.track_b.baseline_trust as bt
+    base = tmp_path / "sf"
+    head = _git_init_commit(base)
+    monkeypatch.setattr(bt, "load_lock", lambda root=None: {
+        "commit": head[:10], "tag": "sf", "release": "x"})
+    # Clean checkout matching the lock -> trusted via stockfish-lock.
+    rep = bt.validate_track_b_baseline(base, root=REPO_ROOT)
+    assert rep["baseline_trust_mode"] == "stockfish-lock"
+    assert rep["worktree_clean"] is True
+    # Modify a tracked file -> dirty -> not trusted (no hash allowlist/toy).
+    (base / "src.cpp").write_text("int x = 9;\n")
+    with pytest.raises(bt.BaselineTrustError):
+        bt.validate_track_b_baseline(base, root=REPO_ROOT)
+
+
+def test_baseline_stockfish_lock_rejects_untracked_file(tmp_path, monkeypatch):
+    import ceb.track_b.baseline_trust as bt
+    base = tmp_path / "sf"
+    head = _git_init_commit(base)
+    monkeypatch.setattr(bt, "load_lock", lambda root=None: {
+        "commit": head[:10], "tag": "sf", "release": "x"})
+    (base / "untracked.txt").write_text("sneaky\n")
+    with pytest.raises(bt.BaselineTrustError):
+        bt.validate_track_b_baseline(base, root=REPO_ROOT)
+
+
+# ----- v0.3.4 review fixes ----------------------------------------------------
+
+def test_baseline_clean_check_rejects_gitignored_file(tmp_path, monkeypatch):
+    # Review #2: a git-ignored extra file in the tree must break the clean check.
+    import ceb.track_b.baseline_trust as bt
+    base = tmp_path / "sf"
+    base.mkdir()
+    (base / ".gitignore").write_text("*.secret\n")
+    (base / "f.cpp").write_text("int x;\n")
+    head = _git_init_commit_existing(base)
+    (base / "evil.secret").write_text("payload\n")   # ignored, but present
+    assert bt.git_worktree_clean(base) is False
+    monkeypatch.setattr(bt, "load_lock", lambda root=None: {
+        "commit": head[:10], "tag": "sf", "release": "x"})
+    with pytest.raises(bt.BaselineTrustError):
+        bt.validate_track_b_baseline(base, root=REPO_ROOT)
+
+
+def test_baseline_clean_check_rejects_dirty_submodule_with_ignore_all(tmp_path):
+    # Review #1: a dirty submodule hidden by .gitmodules ignore=all must NOT
+    # pass the clean checks.
+    import subprocess, os
+    import ceb.track_b.baseline_trust as bt
+    e = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    sub = tmp_path / "sub"; sub.mkdir()
+    (sub / "f.cpp").write_text("int x;\n")
+    subprocess.run(["git", "init", "-q", str(sub)], check=True)
+    subprocess.run(["git", "-C", str(sub), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(sub), "commit", "-q", "-m", "i"], check=True, env=e)
+    super_ = tmp_path / "super"; super_.mkdir()
+    subprocess.run(["git", "init", "-q", str(super_)], check=True)
+    r = subprocess.run(["git", "-C", str(super_), "-c", "protocol.file.allow=always",
+                        "submodule", "add", "-q", str(sub), "sub"],
+                       capture_output=True, env=e)
+    if r.returncode != 0:
+        pytest.skip("git submodule add unavailable in this environment")
+    subprocess.run(["git", "-C", str(super_), "add", "-A"], check=True, env=e)
+    subprocess.run(["git", "-C", str(super_), "commit", "-q", "-m", "i"], check=True, env=e)
+    subprocess.run(["git", "-C", str(super_), "config", "-f", ".gitmodules",
+                    "submodule.sub.ignore", "all"], check=True)
+    subprocess.run(["git", "-C", str(super_), "add", ".gitmodules"], check=True)
+    subprocess.run(["git", "-C", str(super_), "commit", "-q", "-m", "ig"], check=True, env=e)
+    (super_ / "sub" / "f.cpp").write_text("int x = 9;\n")   # dirty submodule
+    assert bt.git_worktree_clean(super_) is False
+    assert bt.git_submodules_clean(super_) is False
+
+
+def test_source_tree_hash_excludes_git(tmp_path):
+    # Review #3: the content hash must exclude .git (stable, scored content).
+    from ceb.hosted.metadata import source_tree_hash, hash_directory
+    tree = tmp_path / "t"
+    (tree / "src").mkdir(parents=True)
+    (tree / "src" / "a.cpp").write_text("int x;\n")
+    h1 = source_tree_hash(tree)
+    (tree / ".git").mkdir()
+    (tree / ".git" / "index").write_text("vcs metadata\n")
+    h2 = source_tree_hash(tree)
+    assert h1 == h2                       # .git excluded from the source hash
+    assert hash_directory(tree) != h2     # plain hash includes .git
+
+
+def _git_init_commit_existing(tree):
+    import subprocess, os
+    e = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    subprocess.run(["git", "init", "-q", str(tree)], check=True)
+    subprocess.run(["git", "-C", str(tree), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(tree), "commit", "-q", "-m", "x"], check=True, env=e)
+    return subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()

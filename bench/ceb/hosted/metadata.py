@@ -42,6 +42,30 @@ def hash_directory(directory):
     return "sha256:" + digest.hexdigest()
 
 
+# VCS / cache directories excluded from a SOURCE content hash.
+_SOURCE_HASH_SKIP_DIRS = {".git", "__pycache__", ".pytest_cache"}
+
+
+def source_tree_hash(directory):
+    """Deterministic sha256 over a tree's SOURCE content, EXCLUDING VCS/cache
+    directories (.git, __pycache__, .pytest_cache). Unlike hash_directory this
+    is the scored source content and is stable between a git checkout and a
+    snapshot of the same source (which has no .git)."""
+    directory = Path(directory)
+    digest = hashlib.sha256()
+    for path in sorted(directory.rglob("*")):
+        rel = path.relative_to(directory)
+        if any(part in _SOURCE_HASH_SKIP_DIRS for part in rel.parts):
+            continue
+        if not path.is_file():
+            continue
+        digest.update(rel.as_posix().encode("utf-8"))
+        digest.update(b"\x00")
+        digest.update(path.read_bytes())
+        digest.update(b"\x01")
+    return "sha256:" + digest.hexdigest()
+
+
 def hash_json(payload):
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -160,3 +160,55 @@ def test_strict_readiness_validates_supplied_baseline(tmp_path, official_pack,
         strict_public_official=True, root=tmp_path)
     assert _checks(report)["track_b_baseline_trust"]["ok"] is False
     assert report["ready"] is False
+
+
+def test_readiness_has_declaration_field(tmp_path, mock_docker):
+    # Item 4: machine-readable declaration + blocking_failures.
+    priv, pub = _keys(tmp_path)
+    report = rmod.readiness_check(
+        db_path=str(hosted_db.init_db(tmp_path / "h.sqlite")),
+        eval_pack_dir=str(TINY_PACK), public_key_path=pub, signing_key_path=priv,
+        track="A", strict_public_official=True)
+    assert report["public_official_declaration"] == "not-ready"
+    assert "official_eval_pack_trusted" in report["blocking_failures"]
+
+
+def test_readiness_pass_declares_ready(tmp_path, official_pack, mock_docker):
+    priv, pub = _keys(tmp_path)
+    report = rmod.readiness_check(
+        db_path=str(hosted_db.init_db(tmp_path / "h.sqlite")),
+        eval_pack_dir=str(official_pack), public_key_path=pub, signing_key_path=priv,
+        track="A", official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+        strict_public_official=True)
+    assert report["public_official_declaration"] == "ready"
+    assert report["blocking_failures"] == []
+
+
+def test_non_strict_never_declares_public_official_ready(tmp_path, official_pack,
+                                                         mock_docker):
+    # Review #5: a non-strict pass is NOT a public-official declaration.
+    priv, pub = _keys(tmp_path)
+    report = rmod.readiness_check(
+        db_path=str(hosted_db.init_db(tmp_path / "h.sqlite")),
+        eval_pack_dir=str(official_pack), public_key_path=pub, signing_key_path=priv,
+        track="A", strict_public_official=False)   # unpinned, non-strict
+    assert report["ready"] is True
+    assert report["public_official_declaration"] == "not-ready"
+
+
+def test_strict_both_requires_both_tracks_pack(tmp_path, mock_docker):
+    # Review #6: --track BOTH must validate the pack as BOTH, not Track A only.
+    from ceb.hosted.build_wrappers import write_demo_wrapper, compute_wrapper_hash
+    priv, pub = _keys(tmp_path)
+    a_only = make_official_pack(tmp_path / "a_pack", manifest_overrides={"track": "A"})
+    wrapper = write_demo_wrapper(tmp_path / "wrapper.sh")
+    report = rmod.readiness_check(
+        db_path=str(hosted_db.init_db(tmp_path / "h.sqlite")),
+        eval_pack_dir=str(a_only), public_key_path=pub, signing_key_path=priv,
+        track="BOTH", build_wrapper=str(wrapper),
+        official_pack_hashes=[compute_eval_pack_hash(a_only)],
+        build_wrapper_hashes=[compute_wrapper_hash(wrapper)],
+        track_b_baseline_hashes=["sha256:" + "0" * 64],
+        strict_public_official=True, root=tmp_path)
+    assert _checks(report)["official_eval_pack_trusted"]["ok"] is False
+    assert report["ready"] is False

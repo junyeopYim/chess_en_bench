@@ -17,7 +17,8 @@
 
 구현:
 - 메타데이터: `bench/ceb/hosted/metadata.py`
-- 서명/키 생성/검증: `bench/ceb/hosted/signing.py`
+- 서명/키 생성/검증/키 로드 검증: `bench/ceb/hosted/signing.py`
+  (`require_ed25519_private_key`가 평가 전에 Ed25519 비공개 키를 로드 검증한다)
 - 검증 판정: `bench/ceb/hosted/verifier.py`
 - 결과 생성기(verified의 Ed25519 강제): `bench/ceb/hosted/official_eval.py`
   (`run_official_eval`, Track A), `bench/ceb/hosted/track_b_eval.py`
@@ -47,14 +48,24 @@
 
 **생성 측** (`official_eval.py`의 `run_official_eval`, `track_b_eval.py`의
 `run_hosted_track_b`): 검증 가능 프로필이 verified가 되려면 평가 *전에* Ed25519
-키가 있어야 한다. `ed25519_private_key_path(explicit_path=signing_key_path)`로
-`--signing-key`(없으면 `CEB_SIGNING_PRIVATE_KEY`)를 확인하고:
+키가 있어야 한다. 핀된 신뢰 팩이 확인된 직후, 정적 스캔 / 엄격 게이트 / 빌드 /
+매치를 **시작하기 전에** `require_ed25519_private_key(explicit_path=signing_key_path)`로
+`--signing-key`(없으면 `CEB_SIGNING_PRIVATE_KEY`)를 **로드 검증(load-validate)**
+한다. 이 함수는 키 경로를 해석한 뒤 `load_private_key`로 실제 로드를 시도해 다음과
+같이 갈린다:
 
-- 키가 없으면 → 평가를 시작하지 않고 **거부**한다("requires an Ed25519 signing
-  key (set `CEB_SIGNING_PRIVATE_KEY` or pass `--signing-key`); HMAC is not
-  accepted ..."). HMAC만 구성된 환경도 verified가 될 수 없다.
-- `--dev-allow-unsigned`가 있으면 → `verified=false`로 강제 다운그레이드하고
-  등급을 `diagnostic-unsigned`로 매긴다(리더보드에 오르지 않음).
+- **키가 잘못됨**(파일 없음 / PEM 손상 등) → `SigningError`를 던지고, 평가는
+  세정된(sanitized) 메시지로 **즉시 하드 실패**한다("Ed25519 signing key could
+  not be loaded; refusing to evaluate"; 상세에 키 파일명과 예외 타입만 노출, 키
+  내용은 노출하지 않음). 스캔·게이트·빌드·매치를 돌린 뒤 서명 단계에서야 실패가
+  드러나는 일이 없으므로, **서명 실패로 게시 대기(staged) 공개 아티팩트가 남지
+  않는다.** 검증된 키 경로(`key_path`)는 서명 시점에 그대로 재사용된다
+  (`signing_key_path = key_path`).
+- **키가 없음**(어떤 Ed25519 키도 구성되지 않음) → `--dev-allow-unsigned`가 있으면
+  `verified=false`로 강제 다운그레이드하고 등급을 `diagnostic-unsigned`로 매긴다
+  (리더보드에 오르지 않음). 없으면 평가를 시작하지 않고 **거부**한다("requires an
+  Ed25519 signing key (set `CEB_SIGNING_PRIVATE_KEY` or pass `--signing-key`);
+  HMAC is not accepted ..."). HMAC만 구성된 환경도 verified가 될 수 없다.
 
 서명 직후 심층 방어로 한 번 더 확인한다: verified 결과의
 `signature.algorithm != "ed25519"`이면 내부 오류로 보고 거부한다. (진단
@@ -222,7 +233,7 @@ ceb hosted release-manifest create --track A --eval-pack <dir> \
 `build_metadata`가 조립하며 모든 필드는 항상 존재한다. 호스트에서 결정할 수
 없는 필드는 생략되지 않고 명시적으로 `null`이다(예: git 트리가 아니면
 `git_commit=null`, docker 미빌드면 이미지 digest=`null`). `benchmark_version`은
-`ceb.__version__`(현재 `0.3.3`), `engine_jail_image_digest`는 감옥 이미지
+`ceb.__version__`(현재 `0.3.4`), `engine_jail_image_digest`는 감옥 이미지
 `chess-en-bench-jail:0.4`를 가리킨다. null은 재현성 저하를 숨기지 않고 명시적
 감사 신호로 드러낸다.
 
@@ -232,5 +243,14 @@ ceb hosted release-manifest create --track A --eval-pack <dir> \
   채널(웹사이트, 저장소 태그)로 게시한다.
 - **비공개 키는 커밋하지 않는다.** `*.pem`은 gitignore되어 있다. 회전, 저장,
   배포는 운영자의 관심사다.
-- **번들 내보내기**: `ceb hosted result export`는 공개 아티팩트와 검증 지침만
-  담은 zip을 만든다(비공개 detail 없음). 검증자는 운영자 공개 키로 확인한다.
+- **번들 내보내기**: `ceb hosted result export --run-id <id> --out <zip>`는 선택된
+  verified 공개 아티팩트(`official_result.json`, `feedback.json`, 공개 리포트)와
+  검증 지침(`VERIFY.txt`)만 담은 zip을 만든다. 스캔·매치 로그 등 비공개/관리자
+  아티팩트와 비공개 키는 결코 담기지 않는다. `--release-manifest <path>`로
+  비밀 없는 릴리스 매니페스트를 함께 넣을 수 있고(`release_manifest.json`),
+  `--public-key <pem>`(지문을 계산) 또는 `--public-key-fingerprint <fp>`로
+  운영자 공개 키 **지문**을 번들에 기록한다(키 자체는 절대 넣지 않음). 지문이
+  있으면 `VERIFY.txt`에 "게시된 공개 키가 이 지문과 일치하는지 먼저 확인하라"는
+  지침이 추가된다. 검증자는 여전히 **대역 외 공개 키**로
+  `ceb hosted verify-result --public-key`를 돌려 `authentic`을 확인한다 —
+  번들의 지문/매니페스트는 그 공개 키를 신뢰하기 위한 대조 앵커일 뿐이다.

@@ -36,6 +36,7 @@ _ARTIFACT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 ADMIN_TOKEN_ENV = "CEB_ADMIN_TOKEN"
 HOSTED_DB_ENV = "CEB_HOSTED_DB"
+RELEASE_MANIFEST_ENV = "CEB_RELEASE_MANIFEST"
 
 
 def _hosted_db_path():
@@ -128,6 +129,26 @@ def hosted_readiness_public():
         "note": "full operator readiness via `ceb hosted readiness check "
                 "--strict-public-official`",
     }
+
+
+@app.get("/api/hosted/release-manifest")
+def hosted_release_manifest():
+    """Serve the operator's public, secret-free release manifest from the path
+    in CEB_RELEASE_MANIFEST. 503 when none is configured, 404 when the file is
+    missing. No admin token required (public GET); the manifest is secret-free
+    by construction (ceb hosted release-manifest create)."""
+    path = os.environ.get(RELEASE_MANIFEST_ENV)
+    if not path:
+        raise HTTPException(status_code=503,
+                            detail="no release manifest configured (set %s)"
+                                   % RELEASE_MANIFEST_ENV)
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="release manifest not found")
+    try:
+        data = json.loads(open(path, encoding="utf-8").read())
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="release manifest unavailable")
+    return data
 
 
 @app.get("/api/artifacts/{artifact_id}")

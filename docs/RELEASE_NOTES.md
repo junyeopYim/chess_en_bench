@@ -3,6 +3,33 @@
 버전 번호는 패키지 버전이다(`pyproject.toml`, `bench/ceb/__init__.py`). 각 릴리스는
 이전 CLI 명령이 계속 동작하도록 유지한다.
 
+## v0.3.4 — 최종 공개 공식 감사 하드닝
+
+테마: 공개 공식 선언 직전의 잔여 모호성을 제거한다. 어떤 `--dev-*` 플래그도
+`verified: true`를 남길 수 없고, 신뢰 앵커는 실제로 검증되며, readiness가 단일
+선언 게이트가 된다. "단일 노드(SQLite + 로컬 FS)"는 정직하게 유지한다.
+
+- **dev 플래그가 verified를 유지하지 못한다(항목 1)**: Track B bench 실패 시
+  `--dev-allow-no-bench`는 더 이상 통과시키지 않고 `verified: false`,
+  `verification_grade: diagnostic-no-bench`로 강등한다(리더보드 제외).
+- **베이스라인 콘텐츠 무결성(항목 2)**: `stockfish-lock` 모드는 git HEAD가 lock과
+  일치할 뿐 아니라 **작업 트리·서브모듈이 깨끗**해야 하며(`git_worktree_clean` /
+  `git_submodules_clean`) 콘텐츠 해시를 기록한다. dirty/untracked는 신뢰되지 않는다.
+- **Ed25519 키 사전 로드(항목 3)**: verifiable 프로파일은 스캔·게이트·빌드·매치
+  **전에** `require_ed25519_private_key`로 키를 로드 검증한다. 손상된 키는 일찍
+  실패하며, 서명 실패로 스테이징된 공개 아티팩트가 남지 않는다.
+- **readiness 선언 게이트(항목 4)**: `ceb hosted readiness check
+  --strict-public-official`이 버전 `>= 0.3.4`를 요구하고 기계가 읽는
+  `public_official_declaration`(`ready`/`not-ready`)과 `blocking_failures`를
+  보고하며 `--track BOTH`를 지원한다. `--json`은 JSON만 출력한다.
+- **릴리스 매니페스트 앵커(항목 5)**: `track_b_baseline_trust_mode`, `bench_policy`,
+  `official_eval_pack_manifest_hash`를 포함한다(비밀 없음, 공개키는 지문만).
+- **공개 API(항목 6)**: 비밀 없는 `GET /api/hosted/release-manifest`
+  (`CEB_RELEASE_MANIFEST` 경로 제공, 없으면 503). 관리자 POST는 상수시간 토큰 비교.
+- **결과 번들(항목 7)**: `ceb hosted result export --release-manifest --public-key`로
+  릴리스 매니페스트와 운영자 공개키 지문 + 검증 지침을 번들에 포함(여전히 선택된
+  검증 결과만, 비밀 없음).
+
 ## v0.3.3 — 최종 공개 공식 하드닝 (단일 노드)
 
 테마: 모든 공개 공식 신뢰 앵커를 **핀(pin)** 하고, 단일 명령

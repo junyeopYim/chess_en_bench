@@ -96,3 +96,16 @@ def test_release_manifest_track_b_ambiguous_hash(tmp_path, official_pack):
             official_pack_hashes=[compute_eval_pack_hash(official_pack)],
             track_b_baseline_hashes=["sha256:" + "1" * 64, "sha256:" + "2" * 64],
             build_wrapper_hashes=["sha256:" + "3" * 64], root=REPO_ROOT)
+
+
+def test_release_manifest_track_b_has_bench_policy_and_trust_mode(tmp_path,
+                                                                  official_pack):
+    pub = _pub(tmp_path)
+    m = build_release_manifest(
+        track="B", eval_pack_dir=str(official_pack), public_key_path=pub,
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+        track_b_baseline_hashes=["sha256:" + "1" * 64],
+        build_wrapper_hashes=["sha256:" + "2" * 64], root=REPO_ROOT)
+    assert m["track_b_baseline_trust_mode"] == "hash"
+    assert m["bench_policy"]["override_downgrades_to_diagnostic"] is True
+    assert m["official_eval_pack_manifest_hash"].startswith("sha256:")

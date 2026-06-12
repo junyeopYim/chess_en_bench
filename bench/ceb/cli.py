@@ -528,12 +528,16 @@ def cmd_hosted_readiness_check(args):
         require_server=args.require_server,
         strict_public_official=args.strict_public_official)
     if args.json:
+        # JSON only, so the output is cleanly machine-parseable.
         _print(json.dumps(report, indent=2))
+        return 0 if report["ready"] else 2
     _print("Official readiness — track %s: %s"
            % (report["track"], "READY" if report["ready"] else "NOT READY"))
     for c in report["checks"]:
         mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
         _print("  [%s] %-30s %s" % (mark, c["name"], c["detail"]))
+    if report["blocking_failures"]:
+        _print("blocking failures: %s" % ", ".join(report["blocking_failures"]))
     return 0 if report["ready"] else 2
 
 
@@ -590,10 +594,21 @@ def cmd_hosted_result_export(args):
 
     conn = hosted_db.connect(args.db)
     try:
+        fingerprint = args.public_key_fingerprint
+        if args.public_key and not fingerprint:
+            from ceb.hosted.signing import (
+                load_public_key, public_key_fingerprint, SigningError)
+            try:
+                fingerprint = public_key_fingerprint(load_public_key(args.public_key))
+            except SigningError as exc:
+                _print("could not load public key: %s" % exc)
+                return 2
         try:
             out_path, manifest = export_result_bundle(
                 conn, args.run_id, args.out, db_path=args.db,
-                include_all_public=args.include_all_public)
+                include_all_public=args.include_all_public,
+                release_manifest_path=args.release_manifest,
+                public_key_fingerprint=fingerprint)
         except ResultBundleError as exc:
             _print("export failed: %s" % exc)
             return 2
@@ -988,6 +1003,12 @@ def build_parser():
     p.add_argument("--include-all-public", action="store_true",
                    help="diagnostic: bundle ALL public artifacts (not just the "
                         "selected verified result); not an official bundle")
+    p.add_argument("--release-manifest", default=None,
+                   help="include this public release manifest in the bundle")
+    p.add_argument("--public-key", default=None,
+                   help="public key PEM; its fingerprint is added to the bundle")
+    p.add_argument("--public-key-fingerprint", default=None,
+                   help="operator public key fingerprint (if not passing a key)")
     p.set_defaults(func=cmd_hosted_result_export)
     p = hosted_sub.add_parser("leaderboard", help="verified-only leaderboard")
     p.add_argument("--db", default="runs/hosted.sqlite")

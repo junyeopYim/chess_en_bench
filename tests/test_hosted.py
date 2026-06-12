@@ -852,3 +852,114 @@ def test_failed_leak_scan_leaves_no_public_artifacts(tmp_path, monkeypatch):
     for manifest in out.rglob(MANIFEST_NAME):
         public += public_artifacts(manifest.parent)
     assert public == []  # nothing promoted to public on a failed scan
+
+
+# ----- v0.3.4 audit -----------------------------------------------------------
+
+def test_malformed_ed25519_key_fails_before_eval(tmp_path, monkeypatch,
+                                                 official_pack):
+    # Item 3: a malformed signing key fails BEFORE scan/gate/match, leaving no
+    # staged public artifacts.
+    import ceb.jail.docker_engine as de
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    from ceb.storage import public_artifacts
+    from ceb.storage.artifacts import MANIFEST_NAME
+
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    bad = tmp_path / "bad.pem"
+    bad.write_text("-----BEGIN PRIVATE KEY-----\nnonsense\n-----END PRIVATE KEY-----\n")
+    monkeypatch.setenv("CEB_SIGNING_PRIVATE_KEY", str(bad))
+    out = tmp_path / "out"
+    with pytest.raises(OfficialEvalError, match="Ed25519"):
+        run_official_eval(
+            run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
+            out_dir=out, profile="official", engine_jail="docker",
+            official_pack_hashes=[compute_eval_pack_hash(official_pack)])
+    public = []
+    for manifest in out.rglob(MANIFEST_NAME):
+        public += public_artifacts(manifest.parent)
+    assert public == []   # nothing staged/promoted after the early key failure
+
+
+def test_api_release_manifest_endpoint(api_client, tmp_path, monkeypatch):
+    # Item 6: serves a configured secret-free manifest; 503 when unset.
+    monkeypatch.delenv("CEB_RELEASE_MANIFEST", raising=False)
+    assert api_client.get("/api/hosted/release-manifest").status_code == 503
+    manifest = {"schema": "ceb.release_manifest/v1", "track": "A",
+                "official_eval_pack_hash": "sha256:abc",
+                "operator_public_key_fingerprint": "ed25519:beef"}
+    path = tmp_path / "release.json"
+    path.write_text(json.dumps(manifest))
+    monkeypatch.setenv("CEB_RELEASE_MANIFEST", str(path))
+    resp = api_client.get("/api/hosted/release-manifest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["operator_public_key_fingerprint"] == "ed25519:beef"
+    assert "PRIVATE" not in json.dumps(body)
+
+
+def test_result_bundle_includes_release_manifest_and_fingerprint(tmp_path):
+    # Item 7: the selected-only bundle includes the release manifest + key
+    # fingerprint, and stays secret-free.
+    import zipfile
+    from ceb.hosted.result_bundle import export_result_bundle
+
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    final_id = _register_result_with_artifacts(
+        db_path, "run", job_id=3, mode="final_production", score=700.0,
+        verified=True, profile="final-production", grade="verified-final-production",
+        public_names=("official_result.json", "feedback.json"),
+        private_names=("scan_report.json",))
+    rel = tmp_path / "release.json"
+    rel.write_text(json.dumps({"schema": "ceb.release_manifest/v1", "track": "A",
+                               "operator_public_key_fingerprint": "ed25519:cafe"}))
+    conn = hosted_db.connect(db_path)
+    try:
+        out, manifest = export_result_bundle(
+            conn, "run", tmp_path / "bundle.zip", db_path=db_path,
+            release_manifest_path=str(rel), public_key_fingerprint="ed25519:cafe")
+    finally:
+        conn.close()
+    assert manifest["selected_result_id"] == final_id
+    assert manifest["release_manifest_included"] is True
+    assert manifest["operator_public_key_fingerprint"] == "ed25519:cafe"
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+        verify = zf.read("VERIFY.txt").decode()
+    assert "release_manifest.json" in names
+    assert "ed25519:cafe" in verify
+    assert not any("scan_report.json" in n for n in names)
+
+
+def test_malformed_key_on_smoke_path_degrades_to_unsigned(tmp_path, monkeypatch):
+    # Review #4: a malformed key on a diagnostic (smoke) path must not crash —
+    # it degrades to unsigned (verified paths load-validate the key up front).
+    bad = tmp_path / "bad.pem"
+    bad.write_text("-----BEGIN PRIVATE KEY-----\nnope\n-----END PRIVATE KEY-----\n")
+    monkeypatch.setenv("CEB_SIGNING_PRIVATE_KEY", str(bad))
+    result = run_official_eval(
+        run_id="s", snapshot=EXAMPLE, eval_pack_dir=str(TINY_PACK),
+        out_dir=tmp_path / "out", quick_test_mode=True)
+    assert result["verified"] is False
+    assert result["signature"]["status"] == "unsigned"
+
+
+def test_result_bundle_rejects_bad_release_manifest(tmp_path):
+    # Review #8: a non-JSON --release-manifest fails cleanly with no partial zip.
+    from ceb.hosted.result_bundle import export_result_bundle, ResultBundleError
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    _register_result_with_artifacts(
+        db_path, "run", job_id=1, mode="final_production", score=700.0,
+        verified=True, profile="final-production", grade="verified-final-production",
+        public_names=("official_result.json",))
+    bad = tmp_path / "bad.json"
+    bad.write_text("-----BEGIN PRIVATE KEY-----\nnot json\n")
+    out = tmp_path / "bundle.zip"
+    conn = hosted_db.connect(db_path)
+    try:
+        with pytest.raises(ResultBundleError, match="JSON"):
+            export_result_bundle(conn, "run", out, db_path=db_path,
+                                 release_manifest_path=str(bad))
+    finally:
+        conn.close()
+    assert not out.exists()    # no partial bundle left behind

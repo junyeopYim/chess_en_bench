@@ -1,5 +1,10 @@
 # 결정 사항
 
+- 2026-06-13 — v0.3.4: 어떤 `--dev-*` 플래그도 verified를 유지하지 못한다. 특히 Track B bench 실패 시 `--dev-allow-no-bench`는 통과가 아니라 `diagnostic-no-bench` 강등(리더보드 제외).
+- 2026-06-13 — v0.3.4: `stockfish-lock` 베이스라인 신뢰는 git HEAD 일치만으로 부족하다 — 작업 트리·서브모듈 clean + 콘텐츠 해시 기록을 요구한다(dirty/untracked는 신뢰 불가).
+- 2026-06-13 — v0.3.4: verifiable 프로파일은 스캔/게이트/빌드/매치 전에 Ed25519 키를 로드 검증한다(`require_ed25519_private_key`) — 손상 키는 조기 실패하고 서명 실패로 스테이징된 공개 아티팩트를 남기지 않는다.
+- 2026-06-13 — v0.3.4: readiness가 단일 선언 게이트다 — `--strict-public-official`는 버전 `>= 0.3.4`를 요구하고 `public_official_declaration`/`blocking_failures`를 보고하며 `--track BOTH`와 JSON 전용 출력을 지원한다.
+- 2026-06-13 — v0.3.4: 비밀 없는 릴리스 매니페스트를 공개 엔드포인트(`/api/hosted/release-manifest`, `CEB_RELEASE_MANIFEST`)와 결과 번들로 배포해 제3자 검증을 돕는다(공개키는 지문만). 관리자 토큰은 상수시간 비교.
 - 2026-06-13 — v0.3.3: 공개 공식 verified는 eval 팩 내용 해시가 허용목록에 핀되어야 한다(`--official-pack-hash` 등); 미핀이면 거부, `--dev-allow-unpinned-pack`은 diagnostic-unpinned-pack(미검증). 자기선언 매니페스트만으로는 부족하다.
 - 2026-06-13 — v0.3.3: Track B verified 베이스라인은 stockfish-lock(HEAD가 stockfish.lock과 일치) 또는 hash 허용목록으로 신뢰되어야 하며, 빌드 래퍼는 해시 핀이 필요하다(`baseline_trust.py`, `--build-wrapper-hash`); toy/미핀은 dev 플래그로만 진단 강등.
 - 2026-06-13 — v0.3.3: 빌드 감옥 출력은 사용 전 검증한다(엔진 정규/실행 가능, 트리 심볼릭 거부, 512MiB/10000파일 한도) + bench/속도 검사로 NPS 비율 기록(양쪽 지원 시에만 임계값 강제).

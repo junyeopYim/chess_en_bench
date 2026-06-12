@@ -57,7 +57,8 @@ def _job_attempt_dir(result_path):
 
 
 def export_result_bundle(conn, run_id, out_zip, db_path, *,
-                         include_all_public=False):
+                         include_all_public=False, release_manifest_path=None,
+                         public_key_fingerprint=None):
     """Write a public result bundle zip. Returns (Path, manifest dict).
 
     By default the bundle contains ONLY the public artifacts of the selected
@@ -90,6 +91,24 @@ def export_result_bundle(conn, run_id, out_zip, db_path, *,
                 % run_id)
         selected_dir = str(_job_attempt_dir(best["result_path"]).resolve())
 
+    # Validate the release manifest BEFORE opening the zip (so a bad path/JSON
+    # never leaves a partial bundle on disk).
+    rel = None
+    if release_manifest_path:
+        if not os.path.isfile(release_manifest_path):
+            raise ResultBundleError(
+                "release manifest not found",
+                "release manifest not found: %s" % release_manifest_path)
+        try:
+            with open(release_manifest_path, encoding="utf-8") as fh:
+                rel = json.load(fh)
+        except (OSError, ValueError) as exc:
+            raise ResultBundleError(
+                "release manifest is not valid JSON",
+                "release manifest read error: %s" % exc)
+        if not isinstance(rel, dict):
+            raise ResultBundleError("release manifest must be a JSON object")
+
     out_zip = Path(out_zip)
     out_zip.parent.mkdir(parents=True, exist_ok=True)
     files = []
@@ -106,9 +125,19 @@ def export_result_bundle(conn, run_id, out_zip, db_path, *,
             arcname = Path(real).relative_to(store).as_posix()
             zf.write(real, arcname)
             files.append(arcname)
+
+        # Optionally include the operator's public release manifest (secret-free)
+        # so a third party can match the result to its official season.
+        manifest_included = False
+        fingerprint = public_key_fingerprint
+        if rel is not None:
+            zf.writestr("release_manifest.json", json.dumps(rel, indent=2) + "\n")
+            manifest_included = True
+            fingerprint = fingerprint or rel.get("operator_public_key_fingerprint")
+
         manifest = {
             "schema": SCHEMA,
-            "version": "v0.3.2",
+            "version": "v0.3.4",
             "run_id": run_id,
             "track": run["track"],
             "verified": bool(best),
@@ -118,10 +147,24 @@ def export_result_bundle(conn, run_id, out_zip, db_path, *,
             "selected_mode": best["mode"] if best else None,
             "selected_grade": best["verification_grade"] if best else None,
             "selected_score": best["score"] if best else None,
+            "release_manifest_included": manifest_included,
+            "operator_public_key_fingerprint": fingerprint,
             "files": files,
             "note": "public artifacts only; verify with the operator's public key",
         }
         zf.writestr("bundle_manifest.json", json.dumps(manifest, indent=2) + "\n")
-        zf.writestr("VERIFY.txt", _VERIFY_TXT)
-    manifest["files"] = files + ["bundle_manifest.json", "VERIFY.txt"]
+        verify_txt = _VERIFY_TXT
+        if fingerprint:
+            verify_txt += ("\nThe operator public key fingerprint for this "
+                           "season is:\n  %s\nVerify the published public key "
+                           "matches this fingerprint before trusting it.\n"
+                           % fingerprint)
+        if manifest_included:
+            verify_txt += ("\nrelease_manifest.json pins this season's anchors "
+                           "(pack hash, key fingerprint, image digests).\n")
+        zf.writestr("VERIFY.txt", verify_txt)
+    extra = ["bundle_manifest.json", "VERIFY.txt"]
+    if manifest_included:
+        extra.append("release_manifest.json")
+    manifest["files"] = files + extra
     return out_zip, manifest

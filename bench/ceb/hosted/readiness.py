@@ -10,7 +10,7 @@ from pathlib import Path
 from ceb import __version__, paths
 
 SCHEMA = "ceb.hosted.readiness/v2"
-_MIN_VERSION = (0, 3, 3)
+_MIN_VERSION = (0, 3, 4)
 
 
 def _version_tuple(text):
@@ -105,9 +105,16 @@ def readiness_check(*, db_path=None, eval_pack_dir=None, public_key_path=None,
                              "CEB_ADMIN_TOKEN set" if token
                              else "set CEB_ADMIN_TOKEN to enable admin endpoints"))
 
-    ready = all(c["ok"] for c in checks if c["required"])
+    blocking = [c["name"] for c in checks if c["required"] and not c["ok"]]
+    ready = not blocking
+    # A PUBLIC-OFFICIAL "ready" declaration is only meaningful under strict mode
+    # (where the pinning / keypair / baseline / wrapper anchors are blocking).
+    # Non-strict "ready" is a diagnostic pass, not a public-official declaration.
+    declaration = "ready" if (ready and strict) else "not-ready"
     return {"schema": SCHEMA, "version": __version__, "track": track,
-            "strict_public_official": strict, "ready": ready, "checks": checks}
+            "strict_public_official": strict, "ready": ready,
+            "public_official_declaration": declaration,
+            "blocking_failures": blocking, "checks": checks}
 
 
 # ----- check groups -----------------------------------------------------------
@@ -142,9 +149,10 @@ def _eval_pack_checks(eval_pack_dir, track, root, cli_hashes, registry, strict):
         resolve_allowed_hashes, validate_official_eval_pack, EvalPackTrustError)
     allowed = resolve_allowed_hashes(cli_hashes=cli_hashes, registry_path=registry)
     try:
+        # For BOTH, the pack must be declared for both tracks (manifest
+        # track: both), not merely Track A.
         trust = validate_official_eval_pack(
-            eval_pack_dir, track=("A" if track == "BOTH" else track),
-            root=root, allowed_hashes=allowed)
+            eval_pack_dir, track=track, root=root, allowed_hashes=allowed)
         out.append(_check("official_eval_pack_trusted", True,
                           "pack_id=%s hash=%s" % (trust["pack_id"],
                                                   trust["pack_hash"][:23])))
@@ -231,11 +239,14 @@ def _track_b_checks(build_wrapper, wrapper_hashes, wrapper_registry,
     out.append(_baseline_trust_check(baseline_hashes, baseline_registry,
                                      baseline_src, root, strict))
 
-    # Bench/speed sanity available.
+    # Bench/speed sanity policy: enforced, and NOT bypassable — a failed bench
+    # (or --dev-allow-no-bench override) downgrades to diagnostic-no-bench, never
+    # verified. A real public season needs a bench-capable (pinned Stockfish)
+    # baseline; toy baselines report bench unsupported.
     out.append(_check("bench_speed_sanity", True,
-                      "bench/speed sanity runs for verified Track B; real "
-                      "public Track B requires pinned Stockfish supporting bench",
-                      required=strict))
+                      "bench enforced when the baseline supports bench; a failed "
+                      "bench or --dev-allow-no-bench downgrades to diagnostic, "
+                      "never verified", required=strict))
 
     # Track B hosted API endpoint importable.
     out.append(_track_b_api_check(strict))

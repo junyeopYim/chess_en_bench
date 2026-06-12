@@ -37,7 +37,8 @@ from ceb.hosted.profiles import (
     GRADE_DIAGNOSTIC_UNTRUSTED_PACK, GRADE_DIAGNOSTIC_UNPINNED_PACK,
     get_profile, profile_for_mode)
 from ceb.hosted.signing import (
-    ALGORITHM_ED25519, ed25519_private_key_path, sign_official_result)
+    ALGORITHM_ED25519, require_ed25519_private_key, sign_official_result,
+    SigningError)
 from ceb.rounds.round_runner import run_round, RoundError
 from ceb.sanitize import SanitizedError, private_detail, sanitize_exception
 from ceb.scan import scan_workspace, scan_public_artifacts
@@ -163,18 +164,28 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
                     "CEB_OFFICIAL_EVAL_PACK_HASHES / --official-pack-registry); "
                     "use --dev-allow-unpinned-pack for a diagnostic result"
                     % prof.name)
-        elif not ed25519_private_key_path(explicit_path=signing_key_path):
-            if allow_unsigned:
-                verified = False
-                grade = GRADE_DIAGNOSTIC_UNSIGNED
-                trust = None
-            else:
+        else:
+            # Pack is trusted + pinned: LOAD-validate the Ed25519 key now, before
+            # any scan/gate/match, so a signing failure cannot strand work.
+            try:
+                key_path = require_ed25519_private_key(explicit_path=signing_key_path)
+            except SigningError as exc:
                 raise OfficialEvalError(
-                    "verified %s evaluation requires an Ed25519 signing key "
-                    "(set CEB_SIGNING_PRIVATE_KEY or pass --signing-key); HMAC "
-                    "is not accepted for public official results. Use "
-                    "--dev-allow-unsigned for a diagnostic (unverified) result"
-                    % prof.name)
+                    "Ed25519 signing key could not be loaded; refusing to "
+                    "evaluate", "Ed25519 key load failed: %s" % exc)
+            if not key_path:
+                if allow_unsigned:
+                    verified = False
+                    grade = GRADE_DIAGNOSTIC_UNSIGNED
+                    trust = None
+                else:
+                    raise OfficialEvalError(
+                        "verified %s evaluation requires an Ed25519 signing key "
+                        "(set CEB_SIGNING_PRIVATE_KEY or pass --signing-key); "
+                        "HMAC is not accepted for public official results. Use "
+                        "--dev-allow-unsigned for a diagnostic result" % prof.name)
+            else:
+                signing_key_path = key_path  # validated; reused at signing time
 
     progress("static scan ...")
     scan_report = scan_workspace(snapshot)

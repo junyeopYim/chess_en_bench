@@ -25,7 +25,7 @@ import time
 from pathlib import Path
 
 from ceb import paths
-from ceb.hosted.metadata import build_metadata, hash_directory
+from ceb.hosted.metadata import build_metadata, hash_directory, source_tree_hash
 from ceb.hosted.models import SCHEMA_TRACK_B_RESULT
 from ceb.hosted.signing import ALGORITHM_ED25519, sign_official_result
 from ceb.sanitize import SanitizedError
@@ -192,7 +192,13 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
     bench_report = _run_bench(baseline_engine, candidate_engine, engine_jail,
                               bench_min_nps_ratio)
     if verified and bench_report["supported"] and not bench_report["passed"]:
-        if not allow_no_bench:
+        if allow_no_bench:
+            # The override NEVER preserves verified: it downgrades to a
+            # diagnostic so a failed bench can never reach the leaderboard.
+            from ceb.hosted.profiles import GRADE_DIAGNOSTIC_NO_BENCH
+            verified = False
+            verification_grade = GRADE_DIAGNOSTIC_NO_BENCH
+        else:
             raise TrackBPipelineError(
                 "verified Track B failed bench/speed sanity: candidate NPS "
                 "ratio %.3f is below the threshold %.3f"
@@ -214,8 +220,8 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         opening_suite=match_report.get("openings_used"),
         random_seed=1000 * round_number, verified=verified)
     metadata["track_b"] = {
-        "baseline_tree_hash": hash_directory(baseline_src),
-        "candidate_tree_hash": hash_directory(candidate_src),
+        "baseline_tree_hash": source_tree_hash(baseline_src),
+        "candidate_tree_hash": source_tree_hash(candidate_src),
         "build_isolation": build_isolation,
         "build_script": build_script if build_isolation == "host" else None,
         "build_wrapper": str(build_wrapper) if build_wrapper else None,

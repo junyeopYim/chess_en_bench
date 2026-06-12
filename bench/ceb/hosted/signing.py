@@ -230,6 +230,27 @@ def ed25519_private_key_path(environ=None, explicit_path=None):
     return (environ if environ is not None else os.environ).get(PRIVATE_KEY_ENV)
 
 
+def require_ed25519_private_key(explicit_path=None, environ=None):
+    """Resolve AND load-validate the Ed25519 private key before any expensive
+    evaluation. Returns the validated key path, or None if no key is configured
+    (the caller decides whether that is a hard fail). Raises SigningError if a
+    CONFIGURED key cannot be loaded (missing file / malformed key), so a signing
+    failure can never happen after a scan/gate/build/match has already run."""
+    from pathlib import Path
+    path = ed25519_private_key_path(environ=environ, explicit_path=explicit_path)
+    if not path:
+        return None
+    try:
+        load_private_key(path)
+    except SigningError:
+        raise
+    except (OSError, ValueError, TypeError) as exc:
+        raise SigningError(
+            "Ed25519 private key %r could not be loaded (%s)"
+            % (Path(path).name, type(exc).__name__))
+    return path
+
+
 def sign_official_result(result, environ=None, private_key_path=None):
     """Sign a result with the strongest configured algorithm: Ed25519 if a
     private key is configured (explicit path or CEB_SIGNING_PRIVATE_KEY), else
@@ -238,7 +259,19 @@ def sign_official_result(result, environ=None, private_key_path=None):
     environ = environ if environ is not None else os.environ
     path = ed25519_private_key_path(environ, private_key_path)
     if path:
-        return sign_result_ed25519(result, load_private_key(path))
+        try:
+            return sign_result_ed25519(result, load_private_key(path))
+        except (SigningError, OSError, ValueError, TypeError):
+            # A malformed/unloadable key on a NON-verified path degrades to
+            # unsigned instead of crashing. Verified paths load-validate the key
+            # up front (require_ed25519_private_key), so they never reach here
+            # with a bad key.
+            result["signature"] = {
+                "status": "unsigned", "algorithm": None,
+                "note": "configured Ed25519 key could not be loaded; this "
+                        "result has NO cryptographic authenticity",
+            }
+            return result
     return sign_result(result, key=get_signing_key(environ))
 
 

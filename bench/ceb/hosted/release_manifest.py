@@ -106,8 +106,10 @@ def build_release_manifest(*, track, eval_pack_dir, public_key_path,
         "engine_jail_image": JAIL_IMAGE,
         "engine_jail_image_digest": image_digest(JAIL_IMAGE),
         "track_b_baseline_hash": None,
+        "track_b_baseline_trust_mode": None,
         "track_b_build_wrapper_hash": None,
         "build_jail_image_digest": None,
+        "bench_policy": None,
         "leaderboard_policy": leaderboard_policy or DEFAULT_LEADERBOARD_POLICY,
         "known_limitations": list(known_limitations or DEFAULT_LIMITATIONS),
     }
@@ -128,8 +130,16 @@ def build_release_manifest(*, track, eval_pack_dir, public_key_path,
         if not wrapper:
             raise ReleaseManifestError(
                 "Track B release manifest requires --build-wrapper-hash")
+        from ceb.track_b.bench_sanity import DEFAULT_MIN_NPS_RATIO
         manifest["track_b_baseline_hash"] = baseline
+        # The manifest pins the baseline by content hash (the strongest mode).
+        manifest["track_b_baseline_trust_mode"] = "hash"
         manifest["track_b_build_wrapper_hash"] = wrapper
         manifest["build_jail_image_digest"] = image_digest(BUILD_JAIL_IMAGE)
+        manifest["bench_policy"] = {
+            "min_nps_ratio": DEFAULT_MIN_NPS_RATIO,
+            "enforced_when_baseline_supports_bench": True,
+            "override_downgrades_to_diagnostic": True,
+        }
 
     return manifest

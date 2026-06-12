@@ -18,7 +18,7 @@ import subprocess
 from pathlib import Path
 
 from ceb import paths
-from ceb.hosted.metadata import hash_directory
+from ceb.hosted.metadata import source_tree_hash
 from ceb.sanitize import SanitizedError
 from ceb.track_b.stockfish import load_lock
 
@@ -29,13 +29,45 @@ class BaselineTrustError(SanitizedError, ValueError):
     pass
 
 
-def _git_head(tree):
+def _git(tree, *args, timeout=15):
     try:
-        proc = subprocess.run(["git", "-C", str(tree), "rev-parse", "HEAD"],
-                              capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(["git", "-C", str(tree), *args],
+                              capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    return proc.stdout.strip() if proc.returncode == 0 else None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _git_head(tree):
+    out = _git(tree, "rev-parse", "HEAD")
+    return out.strip() if out is not None else None
+
+
+def git_worktree_clean(tree):
+    """True iff the git working tree is fully clean: no tracked modifications,
+    no untracked files, and no IGNORED files (a built/polluted tree is not the
+    pinned source). --ignore-submodules=none forces submodule changes to be
+    reported even when .gitmodules sets `ignore = all`, and --ignored catches
+    extra files that .gitignore would otherwise hide."""
+    out = _git(tree, "status", "--porcelain", "--untracked-files=all",
+               "--ignored", "--ignore-submodules=none")
+    return out is not None and out.strip() == ""
+
+
+def git_submodules_clean(tree):
+    """True iff no submodule is out of sync (commit drift) AND no submodule has
+    a dirty working tree — vacuously true when there are no submodules."""
+    status = _git(tree, "submodule", "status", "--recursive")
+    if status is None:
+        return False
+    for line in status.splitlines():
+        if line and line[0] != " ":   # '+', '-', 'U' mark commit drift
+            return False
+    # Also reject a submodule whose working tree is merely dirty at the right
+    # commit (modified tracked files / untracked files inside the submodule).
+    dirty = _git(tree, "submodule", "foreach", "--recursive", "--quiet",
+                 "git status --porcelain --untracked-files=all --ignored")
+    return dirty is not None and dirty.strip() == ""
 
 
 def _matches_lock(head, lock):
@@ -58,7 +90,9 @@ def validate_track_b_baseline(baseline_src, *, root=None, allowed_hashes=None,
     if not baseline_src.is_dir():
         raise BaselineTrustError("baseline tree not found",
                                  "baseline not found: %s" % baseline_src)
-    tree_hash = hash_directory(baseline_src)
+    # Content hash EXCLUDES .git so it is the scored source, stable between a
+    # git checkout and a snapshot of the same source.
+    tree_hash = source_tree_hash(baseline_src)
     try:
         lock = load_lock(root)
     except (FileNotFoundError, OSError, ValueError):
@@ -66,15 +100,20 @@ def validate_track_b_baseline(baseline_src, *, root=None, allowed_hashes=None,
 
     head = _git_head(baseline_src)
     if _matches_lock(head, lock):
-        return {
-            "baseline_trusted": True,
-            "baseline_trust_mode": "stockfish-lock",
-            "baseline_tree_hash": tree_hash,
-            "stockfish_lock": {"release": lock.get("release"),
-                               "tag": lock.get("tag"),
-                               "commit": lock.get("commit")},
-            "head_commit": head,
-        }
+        # HEAD matching the lock is NOT enough: the working tree (and any
+        # submodules) must be clean, else the scored binary would not be the
+        # pinned source. A dirty checkout falls through to hash mode.
+        if git_worktree_clean(baseline_src) and git_submodules_clean(baseline_src):
+            return {
+                "baseline_trusted": True,
+                "baseline_trust_mode": "stockfish-lock",
+                "baseline_tree_hash": tree_hash,   # content hash recorded
+                "worktree_clean": True,
+                "stockfish_lock": {"release": lock.get("release"),
+                                   "tag": lock.get("tag"),
+                                   "commit": lock.get("commit")},
+                "head_commit": head,
+            }
 
     allow = set(allowed_hashes or [])
     if allow and tree_hash in allow:

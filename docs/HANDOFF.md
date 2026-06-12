@@ -1,51 +1,46 @@
 # 핸드오프
 
 ## 목표
-chess_en_bench v0.3.3 — 최종 공개 공식 하드닝. 모든 공개 공식 신뢰 앵커를 핀하고,
-`ceb hosted readiness check --strict-public-official`이 통과할 때만 "Track A·B 공개
-공식 단일 노드 호스트형 준비 완료"로 선언한다. verified는 호스트형 워커가, 깨끗한
-스냅샷 + **핀된 신뢰 공식 팩** + 정적 스캔 + 엄격 게이트 + Docker 엔진 감옥 +
-(Track B)**신뢰 베이스라인** + **핀된 빌드 래퍼** + 격리 빌드 감옥 + 빌드 출력 검증 +
-bench 검사 + 공개 누출 스캔 + Ed25519 서명 + 원자적 펜싱 기록을 모두 만족할 때만
-생성한다.
+chess_en_bench v0.3.4 — 최종 공개 공식 감사 하드닝. 공개 공식 선언 직전의 잔여
+모호성을 제거한다. 메인테이너는 운영자가 실제 공식 비공개 eval 팩·Ed25519 키·Docker
+이미지·핀된 Track B 베이스라인/래퍼 해시를 공급하고
+`ceb hosted readiness check --strict-public-official`가 통과할 때, 저장소를 "Track A·B
+공개 공식 단일 노드 호스트형 벤치마크 준비 완료"로 선언할 수 있다. 분산 프로덕션
+SaaS는 아니다(SQLite + 로컬 FS 단일 노드).
 
-## 현재 상태 (브랜치 v0.3.3-final-public-official-hardening)
-v0.3.2 위에 10개 요구사항을 추가했다.
+## 현재 상태 (브랜치 v0.3.4-final-public-official-audit)
+v0.3.3 위에 감사 항목 1~7을 추가했다.
 
-- (1) eval 팩 해시 핀 필수(`--official-pack-hash` 등). 핀 없으면 거부/
-  `--dev-allow-unpinned-pack`→diagnostic-unpinned-pack.
-- (2) strict readiness: Ed25519 비공개·공개 키 로드 + 키쌍 일치 + 지문 보고.
-- (3) Track B 베이스라인 신뢰(`baseline_trust.py`): stockfish-lock / hash / toy.
-- (4) 빌드 래퍼 해시 핀(`--build-wrapper-hash`).
-- (5) 빌드 출력 검증(`build_jail.validate_build_output`): 심볼릭/크기/개수/엔진.
-- (6) bench/속도 검사(`bench_sanity.py`): NPS 비율, 지원 시에만 임계값 강제.
-- (7) 스테이징 승격: 누출 실패 시 공개 항목 0개 증명.
-- (8) API: `/api/leaderboard?track=B` 위임 + `/api/hosted/readiness/public`.
-- (9) 릴리스 매니페스트(`release_manifest.py`, `ceb hosted release-manifest create`).
-- (10) `--strict-public-official` 최종 게이트, 보고서 `ceb.hosted.readiness/v2`.
-
-새 워커/CLI 플래그: `--official-pack-hash`/`--official-pack-registry`/
-`--build-wrapper-hash`/`--build-wrapper-registry`/`--track-b-baseline-hash`/
-`--track-b-baseline-registry`/`--bench-min-nps-ratio` + dev 플래그
-(`--dev-allow-unpinned-pack`/`--dev-allow-toy-baseline`/
-`--dev-allow-unpinned-wrapper`/`--dev-allow-no-bench`).
+- (1) bench 실패 시 `--dev-allow-no-bench`는 verified를 유지하지 못하고
+  `diagnostic-no-bench`로 강등(리더보드 제외).
+- (2) `stockfish-lock` 베이스라인은 git HEAD 일치 + 작업 트리·서브모듈 clean + 콘텐츠
+  해시 기록을 요구(`baseline_trust.py`). dirty/untracked는 신뢰 불가.
+- (3) `require_ed25519_private_key`로 스캔/게이트/빌드/매치 전에 키 로드 검증; 손상 키는
+  조기 실패, 스테이징된 공개 아티팩트 없음.
+- (4) readiness: 버전 `>= 0.3.4`, `public_official_declaration` +
+  `blocking_failures`, `--track BOTH`, `--json`은 JSON만.
+- (5) 릴리스 매니페스트에 `track_b_baseline_trust_mode`/`bench_policy` 추가(비밀 없음).
+- (6) 공개 `GET /api/hosted/release-manifest`(`CEB_RELEASE_MANIFEST`), 관리자 토큰
+  상수시간 비교.
+- (7) `result export --release-manifest --public-key`로 매니페스트·공개키 지문 포함.
 
 ## 테스트 결과
 - `pip install -e ".[dev,server,hosted]"` 성공.
-- `pytest -q`: **265 passed, 6 skipped**(Docker 통합 opt-in).
+- `pytest -q`: **289 passed, 6 skipped**(Docker 통합 opt-in).
 - `CEB_DOCKER_TESTS=1`(jail:0.4): 검증 Track A/B e2e(핀된 팩/베이스라인/래퍼 + 빌드
-  감옥 + bench) 포함 **69 passed**.
-- CLI: `readiness check --strict-public-official`(완전 핀 → READY, 미핀 → NOT READY),
-  `release-manifest create`(비밀 없는 매니페스트) 모두 의도대로.
+  감옥 + bench) 포함 **84 passed**.
+- CLI: `readiness check --strict-public-official --json`(declaration not-ready, 데모
+  팩 거부), `release-manifest create`(비밀 없는 매니페스트, bench_policy 포함) 확인.
 
-## 알려진 한계 (정직하게)
-- 호스트형 백엔드는 SQLite + 로컬 FS **단일 노드**다. 분산 프로덕션 서비스가 아니다.
-- 검증 e2e와 빌드 감옥/bench는 opt-in Docker 테스트다(CI는 비-docker 가드 + 호스트
-  g++ C++ 게이트 + strict-readiness/release-manifest CLI 스모크).
-- 실제 고정 Stockfish 빌드 래퍼와 실 bench/속도 기준은 운영자가 제공한다(토이 엔진은
-  bench 미지원 → NPS 강제 없음).
-- fastchess는 PGN 오라클 사후 검증 전까지 공식 검증 경로 밖이다.
-- 실제 hidden eval 팩·키·릴리스 매니페스트는 운영자 산출물이며 커밋하지 않는다.
+## 알려진 한계 (정직)
+- 호스트형 백엔드는 SQLite + 로컬 FS **단일 노드** — 분산 프로덕션 SaaS 아님.
+- 검증 e2e/빌드 감옥/bench는 opt-in Docker(CI는 비-docker 가드 + 호스트 g++ C++ 게이트
+  + strict-readiness/release-manifest 스모크).
+- bench NPS는 후보 자기보고 **sanity** 신호(진짜 보호는 diff 화이트리스트 + 스캔 +
+  jail). 실 공개 Track B는 bench 지원 고정 Stockfish 베이스라인 필요.
+- fastchess는 PGN 오라클 사후 검증 전까지 공식 경로 밖.
+- 실제 hidden eval 팩·Ed25519 키·Stockfish 체크아웃·릴리스 매니페스트는 운영자
+  자산이며 커밋하지 않는다.
 
 ## 다음 단계
 - 다중 노드 큐/객체 저장소, 키 회전, 공개키·릴리스 매니페스트 배포 채널.

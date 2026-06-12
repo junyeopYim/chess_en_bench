@@ -86,6 +86,8 @@ jobs:
           assert r["schema"] == "ceb.hosted.readiness/v2"
           assert r["strict_public_official"] is True
           assert r["ready"] is False, "demo-pack deployment must not be ready"
+          assert r["public_official_declaration"] == "not-ready"
+          assert "official_eval_pack_trusted" in r["blocking_failures"]
           assert checks["official_eval_pack_trusted"]["ok"] is False
           assert checks["official_pack_pinned"]["required"] is True   # strict
           assert checks["demo_pack_rejected"]["ok"] is True

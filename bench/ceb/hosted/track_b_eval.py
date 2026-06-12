@@ -25,7 +25,7 @@ from ceb.hosted.profiles import (
     GRADE_DIAGNOSTIC_UNTRUSTED_PACK, GRADE_DIAGNOSTIC_UNPINNED_PACK,
     GRADE_DIAGNOSTIC_UNTRUSTED_BASELINE, GRADE_DIAGNOSTIC_UNTRUSTED_WRAPPER,
     TRACK_B_OFFICIAL_MODE, get_profile)
-from ceb.hosted.signing import ed25519_private_key_path
+from ceb.hosted.signing import require_ed25519_private_key, SigningError
 from ceb.sanitize import private_detail
 from ceb.track_b.baseline_trust import (
     resolve_baseline_hashes, validate_track_b_baseline, BaselineTrustError)
@@ -117,12 +117,20 @@ def run_hosted_track_b(*, run_id, candidate_src, baseline_src, build_script,
              "(--official-pack-hash / CEB_OFFICIAL_EVAL_PACK_HASHES); use "
              "--dev-allow-unpinned-pack for a diagnostic result",
              GRADE_DIAGNOSTIC_UNPINNED_PACK)
-        gate(bool(ed25519_private_key_path(explicit_path=signing_key_path)),
-             allow_unsigned,
+        # Load-validate the Ed25519 key now (a malformed key is a hard fail).
+        try:
+            key_path = require_ed25519_private_key(explicit_path=signing_key_path)
+        except SigningError as exc:
+            raise TrackBPipelineError(
+                "Ed25519 signing key could not be loaded; refusing to evaluate",
+                "Ed25519 key load failed: %s" % exc)
+        gate(bool(key_path), allow_unsigned,
              "verified Track B requires an Ed25519 signing key "
              "(CEB_SIGNING_PRIVATE_KEY / --signing-key); use "
              "--dev-allow-unsigned for a diagnostic result",
              GRADE_DIAGNOSTIC_UNSIGNED)
+        if key_path and state["verified"]:
+            signing_key_path = key_path  # validated; reused at signing time
         if not state["verified"]:
             trust = None  # not a verified, trusted-pack claim
 
