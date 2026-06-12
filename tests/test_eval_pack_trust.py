@@ -95,3 +95,22 @@ def test_manifest_must_exist(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(EvalPackTrustError, match="manifest"):
         load_eval_pack_manifest(tmp_path / "empty")
+
+
+def test_allow_demo_does_not_poison_offrepo_pack(official_pack):
+    # Regression (review #2): --dev-allow-demo-pack must NOT mark a genuine
+    # off-repo pack as demo (demo_path_allowed only when the bypass was used).
+    rep = validate_official_eval_pack(official_pack, track="A", allow_demo=True)
+    assert rep["trusted"] is True
+    assert rep["demo_path_allowed"] is False     # off-repo: no bypass used
+
+
+def test_allow_demo_flags_committed_demo_pack(tmp_path):
+    fake_examples = REPO_ROOT / "examples" / "_demo_flag_probe"
+    try:
+        make_official_pack(fake_examples)
+        rep = validate_official_eval_pack(fake_examples, track="A", allow_demo=True)
+        assert rep["demo_path_allowed"] is True   # bypass actually used
+    finally:
+        import shutil
+        shutil.rmtree(fake_examples, ignore_errors=True)

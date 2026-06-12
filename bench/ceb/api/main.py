@@ -62,7 +62,8 @@ def _require_admin(token):
         raise HTTPException(status_code=503,
                             detail="admin endpoints disabled (set %s)"
                                    % ADMIN_TOKEN_ENV)
-    if not token or token != configured:
+    import hmac
+    if not token or not hmac.compare_digest(str(token), str(configured)):
         raise HTTPException(status_code=403, detail="invalid admin token")
 
 
@@ -90,13 +91,43 @@ def leaderboard(track: str = "A", include_quick: bool = False):
     if track.upper() not in ("A", "B"):
         raise HTTPException(status_code=400, detail="track must be A or B")
     if track.upper() == "B":
-        # Track B has no aggregated leaderboard yet; rounds are scored
-        # individually via `ceb track-b round run`.
+        # If a hosted DB exists, delegate to the verified hosted Track B board
+        # rather than misleadingly claim there is no Track B leaderboard.
+        if os.path.isfile(_hosted_db_path()):
+            from ceb.hosted import db as hosted_db
+            conn = _hosted_conn()
+            try:
+                board = hosted_db.verified_leaderboard(conn, track="B")
+            finally:
+                conn.close()
+            board["note"] = ("verified hosted Track B results; see also "
+                             "GET /api/hosted/leaderboard?track=B")
+            return board
         return {"schema": "ceb.leaderboard/v1", "track": "B", "entries": [],
-                "note": "Track B rounds are scored per run; see "
-                        "docs/track_b_stockfish_optimization.md"}
+                "note": "no hosted DB; verified Track B results appear at "
+                        "GET /api/hosted/leaderboard?track=B"}
     return compute_leaderboard(paths.runs_dir(), track="A",
                                include_quick=include_quick)
+
+
+@app.get("/api/hosted/readiness/public")
+def hosted_readiness_public():
+    """Public, secret-free readiness metadata: version, policy, and profile
+    verifiability. Operator-only anchors (eval pack, keys, images) are checked
+    by the `ceb hosted readiness check` CLI, not exposed here."""
+    from ceb.hosted.profiles import get_profile
+    return {
+        "schema": "ceb.hosted.readiness.public/v1",
+        "benchmark_version": __version__,
+        "smoke_verifiable": get_profile("smoke").verifiable,
+        "official_verifiable": get_profile("official").verifiable,
+        "final_production_verifiable": get_profile("final-production").verifiable,
+        "leaderboard_policy": (
+            "verified results only; best verified per run (final-tier preferred);"
+            " smoke/diagnostic never appear"),
+        "note": "full operator readiness via `ceb hosted readiness check "
+                "--strict-public-official`",
+    }
 
 
 @app.get("/api/artifacts/{artifact_id}")

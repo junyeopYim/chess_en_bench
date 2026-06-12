@@ -34,7 +34,8 @@ from ceb.hosted.metadata import build_metadata
 from ceb.hosted.models import SCHEMA_OFFICIAL_RESULT
 from ceb.hosted.profiles import (
     PROFILE_OFFICIAL, GRADE_DIAGNOSTIC_UNJAILED, GRADE_DIAGNOSTIC_UNSIGNED,
-    GRADE_DIAGNOSTIC_UNTRUSTED_PACK, get_profile, profile_for_mode)
+    GRADE_DIAGNOSTIC_UNTRUSTED_PACK, GRADE_DIAGNOSTIC_UNPINNED_PACK,
+    get_profile, profile_for_mode)
 from ceb.hosted.signing import (
     ALGORITHM_ED25519, ed25519_private_key_path, sign_official_result)
 from ceb.rounds.round_runner import run_round, RoundError
@@ -72,10 +73,10 @@ def _resolve_profile(profile, mode, quick_test_mode):
 def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
                       profile=None, engine_jail="docker", allow_unjailed=False,
                       official_pack_hashes=None, official_pack_registry=None,
-                      allow_demo_pack=False, signing_key_path=None,
-                      allow_unsigned=False, round_number=1, root=None,
-                      progress=lambda msg: None, mode=None,
-                      quick_test_mode=False, mode_config=None):
+                      allow_demo_pack=False, allow_unpinned_pack=False,
+                      signing_key_path=None, allow_unsigned=False,
+                      round_number=1, root=None, progress=lambda msg: None,
+                      mode=None, quick_test_mode=False, mode_config=None):
     """Evaluate one snapshot. Returns the signed result dict.
 
     Raises OfficialEvalError (sanitized) when verification preconditions fail;
@@ -149,6 +150,19 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
             verified = False
             grade = GRADE_DIAGNOSTIC_UNTRUSTED_PACK
             trust = None
+        elif not trust.get("allowlist_checked"):
+            # Public official verification requires the pack hash to be PINNED.
+            if allow_unpinned_pack:
+                verified = False
+                grade = GRADE_DIAGNOSTIC_UNPINNED_PACK
+                trust = None
+            else:
+                raise OfficialEvalError(
+                    "verified %s evaluation requires a PINNED official eval "
+                    "pack hash (--official-pack-hash / "
+                    "CEB_OFFICIAL_EVAL_PACK_HASHES / --official-pack-registry); "
+                    "use --dev-allow-unpinned-pack for a diagnostic result"
+                    % prof.name)
         elif not ed25519_private_key_path(explicit_path=signing_key_path):
             if allow_unsigned:
                 verified = False

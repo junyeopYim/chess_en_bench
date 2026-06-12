@@ -10,12 +10,13 @@
 테스트가 동작을 검증할 수 있도록 문서화된 형태를 제공하기 위해 존재한다. 실제
 hidden FEN, perft 기댓값, 오프닝은 운영자가 관리하며 배포마다 마운트된다.
 
-## 신뢰된 공식 팩(verified 전용, v0.3.2)
+## 신뢰된 공식 팩(verified 전용, v0.3.3)
 
 공개 공식 `verified: true` 결과는 **신뢰된 공식 팩**만 사용할 수 있다(데모 팩은
 절대 불가). 신뢰 검증은 `bench/ceb/hosted/eval_pack_trust.py`의
-`validate_official_eval_pack`이 수행한다. 공식 팩 디렉터리는 다음 매니페스트를
-포함해야 한다:
+`validate_official_eval_pack`이 수행한다. 매니페스트 스키마
+(`ceb.eval_pack.manifest/v1`)는 v0.3.2에서 바뀌지 않았다. 공식 팩 디렉터리는 다음
+매니페스트를 포함해야 한다:
 
 ```json
 {
@@ -37,14 +38,39 @@ hidden FEN, perft 기댓값, 오프닝은 운영자가 관리하며 배포마다
   (평가 트랙과 일치해야 함).
 - 팩은 저장소의 `examples/` 또는 `tests/` 같은 커밋/데모 경로 **밖**에 있어야 한다
   (개발용 `--dev-allow-demo-pack` 예외).
-- 운영자가 허용목록을 제공하면 팩의 내용 해시(`hash_directory`의 `sha256:`)가
-  일치해야 한다. 허용목록 출처: env `CEB_OFFICIAL_EVAL_PACK_HASHES`(콤마 구분),
-  `--official-pack-hash`(반복/콤마), `--official-pack-registry`(JSON/텍스트 파일).
+
+### 해시 핀 고정은 verified에 필수 (req1, v0.3.3)
+
+v0.3.3부터 공개 공식 verified 결과는 팩의 내용 해시(`hash_directory`의 `sha256:`)가
+운영자 **허용목록에 핀 고정(PINNED)**되어 있어야 한다. 허용목록을 전혀 주지 않으면
+`validate_official_eval_pack`이 반환하는 `allowlist_checked`가 `false`가 되고,
+**평가를 시작하기 전에** verified가 실패한다. 허용목록을 주면 팩 해시가 그 안에
+있어야 통과한다(없으면 `EvalPackTrustError`). 허용목록 출처는 세 가지로, 모두
+`resolve_allowed_hashes`가 병합한다:
+
+- env `CEB_OFFICIAL_EVAL_PACK_HASHES` — 콤마 구분
+- `--official-pack-hash` — 반복/콤마
+- `--official-pack-registry` — JSON(`{"hashes":[...]}`/리스트) 또는 한 줄당 한 해시인
+  텍스트 파일
+
+핀 고정이 없을 때의 동작(`official_eval.py`, `track_b_eval.py`):
+
+- 기본값: verified 평가를 **거부**한다("requires a PINNED official eval pack
+  hash" 메시지).
+- `--dev-allow-unpinned-pack`(개발용): verified로 올리지 않고
+  `verified: false`, grade `diagnostic-unpinned-pack`으로 강등한다.
+
+`smoke` 프로파일은 여전히 데모 팩을 unverified로 사용하며 이 검사를 만족시키지
+않는다(따라서 절대 verified가 될 수 없다). 커밋/데모 경로를 `--dev-allow-demo-pack`
+으로 통과시킨 경우(`demo_path_allowed`)는 `diagnostic-untrusted-pack`으로
+별도 강등된다.
 
 verified 결과 메타데이터에 기록되는 신뢰 필드: `eval_pack_id`, `eval_pack_hash`,
 `eval_pack_manifest_hash`, `eval_pack_trusted: true`, `eval_pack_track`,
 `eval_pack_season`. 팩 해시는 `ceb hosted readiness check --eval-pack <dir>`로
-확인할 수 있다.
+확인할 수 있다. strict readiness(`ceb hosted readiness check
+--strict-public-official`)에서는 trusted+PINNED 공식 팩 앵커가 경고가 아니라
+**필수(blocking)** 검사다.
 
 ## 공개 팩
 

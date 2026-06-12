@@ -6,9 +6,12 @@ build logic for a verified evaluation. This module validates a wrapper path and
 ships a tiny demo wrapper used by tests and local diagnostics.
 """
 
+import hashlib
 from pathlib import Path
 
 from ceb.sanitize import SanitizedError
+
+ENV_WRAPPER_HASHES = "CEB_TRACK_B_BUILD_WRAPPER_HASHES"
 
 # A tiny demo wrapper: copies the (read-only) source into the writable output
 # dir and produces an engine. It mirrors the toy fake Track B trees used in
@@ -75,3 +78,16 @@ def write_demo_wrapper(path):
     path.write_text(DEMO_WRAPPER, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def compute_wrapper_hash(wrapper_path):
+    """Deterministic sha256 of the build wrapper file contents."""
+    return "sha256:" + hashlib.sha256(
+        Path(wrapper_path).read_bytes()).hexdigest()
+
+
+def resolve_wrapper_hashes(*, environ=None, cli_hashes=None, registry_path=None):
+    from ceb.hosted.eval_pack_trust import resolve_hash_allowlist
+    return resolve_hash_allowlist(env_var=ENV_WRAPPER_HASHES, environ=environ,
+                                  cli_hashes=cli_hashes,
+                                  registry_path=registry_path)

@@ -22,9 +22,13 @@ from ceb.storage import VISIBILITY_PRIVATE, visibility_of
 def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
              profile=None, quick_test_mode=False, allow_unjailed=False,
              official_pack_hashes=None, official_pack_registry=None,
-             allow_demo_pack=False, signing_key_path=None, allow_unsigned=False,
-             build_wrapper=None, worker_id=None, lease_seconds=None, mode=None,
-             progress=lambda msg: None):
+             allow_demo_pack=False, allow_unpinned_pack=False,
+             signing_key_path=None, allow_unsigned=False, build_wrapper=None,
+             build_wrapper_hashes=None, build_wrapper_registry=None,
+             allow_unpinned_wrapper=False, track_b_baseline_hashes=None,
+             track_b_baseline_registry=None, allow_toy_baseline=False,
+             bench_min_nps_ratio=None, allow_no_bench=False, worker_id=None,
+             lease_seconds=None, mode=None, progress=lambda msg: None):
     """Atomically claim and process the oldest queued job. Returns a status dict.
 
     {"status": "idle"} when nothing is claimable;
@@ -42,9 +46,18 @@ def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
         "official_pack_hashes": official_pack_hashes,
         "official_pack_registry": official_pack_registry,
         "allow_demo_pack": allow_demo_pack,
+        "allow_unpinned_pack": allow_unpinned_pack,
         "signing_key_path": signing_key_path,
         "allow_unsigned": allow_unsigned,
         "build_wrapper": build_wrapper,
+        "build_wrapper_hashes": build_wrapper_hashes,
+        "build_wrapper_registry": build_wrapper_registry,
+        "allow_unpinned_wrapper": allow_unpinned_wrapper,
+        "track_b_baseline_hashes": track_b_baseline_hashes,
+        "track_b_baseline_registry": track_b_baseline_registry,
+        "allow_toy_baseline": allow_toy_baseline,
+        "bench_min_nps_ratio": bench_min_nps_ratio,
+        "allow_no_bench": allow_no_bench,
     }
     conn = hosted_db.connect(db_path)
     try:
@@ -120,6 +133,7 @@ def _evaluate_track_a(conn, job, out_dir, *, eval_pack_dir, engine_jail,
         official_pack_hashes=policy["official_pack_hashes"],
         official_pack_registry=policy["official_pack_registry"],
         allow_demo_pack=policy["allow_demo_pack"],
+        allow_unpinned_pack=policy["allow_unpinned_pack"],
         signing_key_path=policy["signing_key_path"],
         allow_unsigned=policy["allow_unsigned"],
         quick_test_mode=quick_test_mode, mode=mode, progress=progress)
@@ -157,9 +171,18 @@ def _evaluate_track_b(conn, job, out_dir, *, eval_pack_dir, engine_jail,
         official_pack_hashes=policy["official_pack_hashes"],
         official_pack_registry=policy["official_pack_registry"],
         allow_demo_pack=policy["allow_demo_pack"],
+        allow_unpinned_pack=policy["allow_unpinned_pack"],
         signing_key_path=policy["signing_key_path"],
         allow_unsigned=policy["allow_unsigned"],
         build_wrapper=policy["build_wrapper"],
+        build_wrapper_hashes=policy["build_wrapper_hashes"],
+        build_wrapper_registry=policy["build_wrapper_registry"],
+        allow_unpinned_wrapper=policy["allow_unpinned_wrapper"],
+        track_b_baseline_hashes=policy["track_b_baseline_hashes"],
+        track_b_baseline_registry=policy["track_b_baseline_registry"],
+        allow_toy_baseline=policy["allow_toy_baseline"],
+        bench_min_nps_ratio=policy["bench_min_nps_ratio"],
+        allow_no_bench=policy["allow_no_bench"],
         quick_test_mode=quick_test_mode, progress=progress)
     score = track_b_score(report)
     return {

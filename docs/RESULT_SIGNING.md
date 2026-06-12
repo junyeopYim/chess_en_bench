@@ -180,12 +180,49 @@ ceb hosted verify-result --result official_result.json --public-key pub.pem
 공격자가 자기 키로 위조 결과에 서명하고 그 공개 키를 임베드할 수 있기 때문이다.
 진짜 판정을 보려면 운영자가 신뢰 채널로 게시한 공개 키를 `--public-key`로 준다.
 
+## 엄격 준비도의 키 요건 (`readiness.py`, `_key_checks`)
+
+`ceb hosted readiness check --strict-public-official`는 서명 키 앵커를
+**차단 조건(required)**으로 강제한다(비-엄격 모드에서는 경고). 키 관련
+체크 세 가지가 모두 통과해야 공개 공식 단일 노드 호스트로 선언할 수 있다:
+
+- `ed25519_signing_key` — `--signing-key`(없으면 `CEB_SIGNING_PRIVATE_KEY`)로
+  지정된 Ed25519 **비공개 키가 로드 가능**한가. (이 체크는 엄격/비엄격 모두
+  required.)
+- `public_key_verify_ready` — `--public-key`로 준 **공개 키가 로드 가능**한가.
+  엄격 모드에서 required다. 통과 시 detail에 공개 키 지문
+  (`public_key_fingerprint`, `ed25519:<hex>`)이 들어간다. 이 공개 키가 있어야
+  제3자가 대역 외로 검증할 수 있다.
+- `keypair_match` — **키쌍 일치**: 비공개 키의 `private.public_key()` 지문이
+  공급된 공개 키 지문과 **같은가**(`public_key_fingerprint(private.public_key())
+  == public_key_fingerprint(public)`). 엄격 모드에서 required다. 둘 중 하나라도
+  로드되지 않으면 이 체크는 실패한다.
+
+즉 엄격 준비도는 "로드 가능한 Ed25519 비공개 키 + 로드 가능한 공개 키 + 둘의
+지문 일치"를 동시에 요구하며, 리포트에 공개 키 지문을 포함한다. 운영자가
+잘못된(짝이 맞지 않는) 공개 키를 게시하는 일을 출시 전에 막는다. 공개
+리더보드는 이 운영자 공개 키 지문과 배포 경로를 함께 게시한다.
+
+## 릴리스 매니페스트의 공개 키 지문 (`hosted/release_manifest.py`)
+
+```bash
+ceb hosted release-manifest create --track A --eval-pack <dir> \
+  --official-pack-hash <hash> --public-key pub.pem --out manifest.json
+```
+
+비밀 없는(secret-free) `ceb.release_manifest/v1` 매니페스트는 운영자 공개 키의
+**지문만**(`operator_public_key_fingerprint`) 싣고 **공개 키 자체는 결코 싣지
+않는다**. 매니페스트 생성은 핀된 공식 팩 해시와 `--public-key`를 요구하며,
+공개 키를 로드해 `public_key_fingerprint`로 지문을 계산한다. 검증자는 이
+지문을 운영자가 대역 외로 배포한 실제 공개 키와 대조한 뒤, 그 공개 키로
+`ceb hosted verify-result --public-key`를 돌려 `authentic`을 확인한다.
+
 ## 메타데이터 블록
 
 `build_metadata`가 조립하며 모든 필드는 항상 존재한다. 호스트에서 결정할 수
 없는 필드는 생략되지 않고 명시적으로 `null`이다(예: git 트리가 아니면
 `git_commit=null`, docker 미빌드면 이미지 digest=`null`). `benchmark_version`은
-`ceb.__version__`(현재 `0.3.2`), `engine_jail_image_digest`는 감옥 이미지
+`ceb.__version__`(현재 `0.3.3`), `engine_jail_image_digest`는 감옥 이미지
 `chess-en-bench-jail:0.4`를 가리킨다. null은 재현성 저하를 숨기지 않고 명시적
 감사 신호로 드러낸다.
 

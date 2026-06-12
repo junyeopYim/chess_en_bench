@@ -456,9 +456,18 @@ def cmd_hosted_worker_run_once(args):
         official_pack_hashes=args.official_pack_hash,
         official_pack_registry=args.official_pack_registry,
         allow_demo_pack=args.dev_allow_demo_pack,
+        allow_unpinned_pack=args.dev_allow_unpinned_pack,
         signing_key_path=args.signing_key,
         allow_unsigned=args.dev_allow_unsigned,
         build_wrapper=args.build_wrapper,
+        build_wrapper_hashes=args.build_wrapper_hash,
+        build_wrapper_registry=args.build_wrapper_registry,
+        allow_unpinned_wrapper=args.dev_allow_unpinned_wrapper,
+        track_b_baseline_hashes=args.track_b_baseline_hash,
+        track_b_baseline_registry=args.track_b_baseline_registry,
+        allow_toy_baseline=args.dev_allow_toy_baseline,
+        bench_min_nps_ratio=args.bench_min_nps_ratio,
+        allow_no_bench=args.dev_allow_no_bench,
         worker_id=args.worker_id, lease_seconds=args.lease_seconds,
         progress=lambda msg: _print("  " + msg))
     _print(json.dumps(status, indent=2))
@@ -511,7 +520,13 @@ def cmd_hosted_readiness_check(args):
         build_wrapper=args.build_wrapper, signing_key_path=args.signing_key,
         official_pack_hashes=args.official_pack_hash,
         official_pack_registry=args.official_pack_registry,
-        require_server=args.require_server)
+        build_wrapper_hashes=args.build_wrapper_hash,
+        build_wrapper_registry=args.build_wrapper_registry,
+        track_b_baseline_hashes=args.track_b_baseline_hash,
+        track_b_baseline_registry=args.track_b_baseline_registry,
+        baseline_src=args.baseline_src,
+        require_server=args.require_server,
+        strict_public_official=args.strict_public_official)
     if args.json:
         _print(json.dumps(report, indent=2))
     _print("Official readiness — track %s: %s"
@@ -520,6 +535,36 @@ def cmd_hosted_readiness_check(args):
         mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
         _print("  [%s] %-30s %s" % (mark, c["name"], c["detail"]))
     return 0 if report["ready"] else 2
+
+
+def cmd_hosted_release_manifest_create(args):
+    from ceb.hosted.release_manifest import (
+        build_release_manifest, ReleaseManifestError)
+
+    try:
+        manifest = build_release_manifest(
+            track=args.track, eval_pack_dir=args.eval_pack,
+            public_key_path=args.public_key,
+            benchmark_version=args.benchmark_version, season=args.season,
+            official_pack_hashes=args.official_pack_hash,
+            official_pack_registry=args.official_pack_registry,
+            track_b_baseline_hashes=args.track_b_baseline_hash,
+            track_b_baseline_registry=args.track_b_baseline_registry,
+            build_wrapper_hashes=args.build_wrapper_hash,
+            build_wrapper_registry=args.build_wrapper_registry,
+            leaderboard_policy=args.leaderboard_policy)
+    except ReleaseManifestError as exc:
+        _print("release manifest failed: %s" % exc)
+        return 2
+    text = json.dumps(manifest, indent=2) + "\n"
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        _print("wrote release manifest: %s" % args.out)
+        _print("  pack hash : %s" % manifest["official_eval_pack_hash"])
+        _print("  key id    : %s" % manifest["operator_public_key_fingerprint"])
+    else:
+        _print(text)
+    return 0
 
 
 def cmd_hosted_keygen(args):
@@ -886,14 +931,37 @@ def build_parser():
     p.add_argument("--build-wrapper", default=None,
                    help="trusted Track B build wrapper outside the candidate "
                         "tree (REQUIRED to verify Track B)")
+    p.add_argument("--build-wrapper-hash", action="append", default=None,
+                   help="allowlisted trusted build-wrapper hash (Track B; repeat/"
+                        "comma; also CEB_TRACK_B_BUILD_WRAPPER_HASHES)")
+    p.add_argument("--build-wrapper-registry", default=None,
+                   help="JSON/text file of allowlisted build-wrapper hashes")
+    p.add_argument("--track-b-baseline-hash", action="append", default=None,
+                   help="allowlisted Track B baseline tree hash (repeat/comma; "
+                        "also CEB_TRACK_B_BASELINE_HASHES)")
+    p.add_argument("--track-b-baseline-registry", default=None,
+                   help="JSON/text file of allowlisted Track B baseline hashes")
+    p.add_argument("--bench-min-nps-ratio", type=float, default=None,
+                   help="min candidate/baseline NPS ratio for verified Track B "
+                        "(enforced only when both engines support `bench`)")
     p.add_argument("--dev-allow-demo-pack", action="store_true",
-                   help="DEV ONLY: accept a committed/demo eval pack for a "
-                        "verifiable profile (still needs a valid official "
-                        "manifest)")
+                   help="DEV ONLY: accept a committed/demo eval pack "
+                        "(diagnostic-untrusted-pack; never verified)")
+    p.add_argument("--dev-allow-unpinned-pack", action="store_true",
+                   help="DEV ONLY: accept an official pack with no hash "
+                        "allowlist (diagnostic-unpinned-pack; never verified)")
     p.add_argument("--dev-allow-unsigned", action="store_true",
                    help="DEV ONLY: run a verifiable profile without an Ed25519 "
-                        "key; the result is forced to verified=false "
-                        "(diagnostic-unsigned)")
+                        "key (diagnostic-unsigned; never verified)")
+    p.add_argument("--dev-allow-toy-baseline", action="store_true",
+                   help="DEV ONLY: accept an untrusted Track B baseline "
+                        "(diagnostic-untrusted-baseline; never verified)")
+    p.add_argument("--dev-allow-unpinned-wrapper", action="store_true",
+                   help="DEV ONLY: accept a build wrapper with no hash allowlist "
+                        "(diagnostic-untrusted-wrapper; never verified)")
+    p.add_argument("--dev-allow-no-bench", action="store_true",
+                   help="DEV ONLY: do not fail a verified Track B on a low NPS "
+                        "ratio")
     p.add_argument("--worker-id", default=None,
                    help="identifier recorded on claimed jobs (multi-worker)")
     p.add_argument("--lease-seconds", type=int, default=None,
@@ -937,10 +1005,37 @@ def build_parser():
     p.add_argument("--signing-key", default=None)
     p.add_argument("--official-pack-hash", action="append", default=None)
     p.add_argument("--official-pack-registry", default=None)
+    p.add_argument("--build-wrapper-hash", action="append", default=None)
+    p.add_argument("--build-wrapper-registry", default=None)
+    p.add_argument("--track-b-baseline-hash", action="append", default=None)
+    p.add_argument("--track-b-baseline-registry", default=None)
+    p.add_argument("--baseline-src", default=None,
+                   help="Track B baseline tree to check for pinned-Stockfish trust")
+    p.add_argument("--strict-public-official", action="store_true",
+                   help="treat pinning / public key / keypair-match / baseline / "
+                        "wrapper-hash anchors as BLOCKING (the final gate)")
     p.add_argument("--require-server", action="store_true",
                    help="also require the hosted API admin token (server mode)")
     p.add_argument("--json", action="store_true", help="also print JSON report")
     p.set_defaults(func=cmd_hosted_readiness_check)
+    rel = hosted_sub.add_parser("release-manifest",
+                                help="public release manifest for a season")
+    rel_sub = rel.add_subparsers(dest="subsubcommand", required=True)
+    p = rel_sub.add_parser("create", help="emit a secret-free release manifest")
+    p.add_argument("--track", default="A")
+    p.add_argument("--benchmark-version", default=None)
+    p.add_argument("--season", default=None)
+    p.add_argument("--eval-pack", required=True)
+    p.add_argument("--official-pack-hash", action="append", default=None)
+    p.add_argument("--official-pack-registry", default=None)
+    p.add_argument("--public-key", required=True)
+    p.add_argument("--track-b-baseline-hash", action="append", default=None)
+    p.add_argument("--track-b-baseline-registry", default=None)
+    p.add_argument("--build-wrapper-hash", action="append", default=None)
+    p.add_argument("--build-wrapper-registry", default=None)
+    p.add_argument("--leaderboard-policy", default=None)
+    p.add_argument("--out", default=None, help="output JSON path (else stdout)")
+    p.set_defaults(func=cmd_hosted_release_manifest_create)
     p = hosted_sub.add_parser("keygen", help="generate an Ed25519 signing keypair")
     p.add_argument("--private-key", required=True, help="output private key path")
     p.add_argument("--public-key", required=True, help="output public key path")

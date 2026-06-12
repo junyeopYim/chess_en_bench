@@ -1,49 +1,53 @@
 # 핸드오프
 
 ## 목표
-chess_en_bench v0.3.2 — 공개 공식 호스트형 벤치마크 준비. 정상/악의 운영 모두에서
-우연히 `verified: true`가 생성될 수 없게 한다. verified는 깨끗한 스냅샷 + 신뢰된
-공식 평가 팩 + 정적 스캔 + 엄격 게이트 + Docker 엔진 감옥 + (Track B)격리 빌드
-감옥 + 공개 누출 스캔 + Ed25519 서명 + 원자적 소유권 펜싱 기록을 모두 만족할
-때만 호스트형 워커가 생성한다.
+chess_en_bench v0.3.3 — 최종 공개 공식 하드닝. 모든 공개 공식 신뢰 앵커를 핀하고,
+`ceb hosted readiness check --strict-public-official`이 통과할 때만 "Track A·B 공개
+공식 단일 노드 호스트형 준비 완료"로 선언한다. verified는 호스트형 워커가, 깨끗한
+스냅샷 + **핀된 신뢰 공식 팩** + 정적 스캔 + 엄격 게이트 + Docker 엔진 감옥 +
+(Track B)**신뢰 베이스라인** + **핀된 빌드 래퍼** + 격리 빌드 감옥 + 빌드 출력 검증 +
+bench 검사 + 공개 누출 스캔 + Ed25519 서명 + 원자적 펜싱 기록을 모두 만족할 때만
+생성한다.
 
-## 현재 상태 (브랜치 v0.3.2-public-official-readiness)
-v0.3.1의 모든 가드 위에 다음을 추가했다.
+## 현재 상태 (브랜치 v0.3.3-final-public-official-hardening)
+v0.3.2 위에 10개 요구사항을 추가했다.
 
-- (A) 신뢰된 공식 평가 팩 가드(`bench/ceb/hosted/eval_pack_trust.py`):
-  `ceb.eval_pack.manifest/v1` + 비-데모 경로 + 선택적 해시 허용목록. 데모 팩은 절대
-  verified 불가. 결과에 `eval_pack_id/hash/manifest_hash/trusted/track/season` 기록.
-- (B) verified는 Ed25519 서명 필수. 키 없으면 거부(또는 `--dev-allow-unsigned`로
-  diagnostic-unsigned). HMAC은 공개 공식 verified 불가. 검증기가 강제.
-- (C) Track B 후보 빌드 격리(`build_jail.py` + `build_wrappers.py` +
-  `infra/docker/track_b_build_jail.Dockerfile`): 신뢰된 운영자 래퍼가 Docker 빌드
-  감옥에서 빌드. verified는 호스트 빌드 거부.
-- (D) 공개 아티팩트 스테이징→누출 스캔→승격(`bench/ceb/storage/promotion.py`):
-  스캔 통과 전에는 어떤 공개 아티팩트도 존재/제공되지 않음.
-- (E) Track B 호스트형 제출 API(`POST .../track-b-submissions`, 관리자 전용).
-- (F) 결과 번들은 선택된 검증 결과만(`--include-all-public`는 진단용).
-- (G) 스트리밍 업로드(청크 단위 바이트 한도, 실패 시 임시 파일 삭제).
-- (H) 공식 준비 점검 `ceb hosted readiness check`(JSON+요약, 미준비 시 비정상 종료).
-- (I) 문서/CI 갱신.
+- (1) eval 팩 해시 핀 필수(`--official-pack-hash` 등). 핀 없으면 거부/
+  `--dev-allow-unpinned-pack`→diagnostic-unpinned-pack.
+- (2) strict readiness: Ed25519 비공개·공개 키 로드 + 키쌍 일치 + 지문 보고.
+- (3) Track B 베이스라인 신뢰(`baseline_trust.py`): stockfish-lock / hash / toy.
+- (4) 빌드 래퍼 해시 핀(`--build-wrapper-hash`).
+- (5) 빌드 출력 검증(`build_jail.validate_build_output`): 심볼릭/크기/개수/엔진.
+- (6) bench/속도 검사(`bench_sanity.py`): NPS 비율, 지원 시에만 임계값 강제.
+- (7) 스테이징 승격: 누출 실패 시 공개 항목 0개 증명.
+- (8) API: `/api/leaderboard?track=B` 위임 + `/api/hosted/readiness/public`.
+- (9) 릴리스 매니페스트(`release_manifest.py`, `ceb hosted release-manifest create`).
+- (10) `--strict-public-official` 최종 게이트, 보고서 `ceb.hosted.readiness/v2`.
+
+새 워커/CLI 플래그: `--official-pack-hash`/`--official-pack-registry`/
+`--build-wrapper-hash`/`--build-wrapper-registry`/`--track-b-baseline-hash`/
+`--track-b-baseline-registry`/`--bench-min-nps-ratio` + dev 플래그
+(`--dev-allow-unpinned-pack`/`--dev-allow-toy-baseline`/
+`--dev-allow-unpinned-wrapper`/`--dev-allow-no-bench`).
 
 ## 테스트 결과
-- `python -m pip install -e ".[dev,server,hosted]"` 성공.
-- `pytest -q`: **238 passed, 6 skipped**(Docker 통합 opt-in).
-- `CEB_DOCKER_TESTS=1`(jail:0.4 빌드 후): 검증 Track A e2e, 검증 Track B(빌드 감옥),
-  C++-in-jail 게이트 등 opt-in 14개 통과. 검증 결과는 Ed25519 서명·공개키로
-  authentic=true·신뢰 팩으로 확인.
-- `ceb hosted readiness check`: 데모 팩에서 NOT READY(공식팩/Ed25519 FAIL), 공식
-  설정에서 READY.
+- `pip install -e ".[dev,server,hosted]"` 성공.
+- `pytest -q`: **265 passed, 6 skipped**(Docker 통합 opt-in).
+- `CEB_DOCKER_TESTS=1`(jail:0.4): 검증 Track A/B e2e(핀된 팩/베이스라인/래퍼 + 빌드
+  감옥 + bench) 포함 **69 passed**.
+- CLI: `readiness check --strict-public-official`(완전 핀 → READY, 미핀 → NOT READY),
+  `release-manifest create`(비밀 없는 매니페스트) 모두 의도대로.
 
-## 알려진 한계
-- 검증 e2e(Track A/B, 빌드 감옥, C++-in-jail)는 opt-in Docker 테스트다(CI는 비-docker
-  가드 + 호스트 g++ C++ 게이트로 커버).
-- 호스트형 백엔드는 SQLite + 로컬 FS(단일 노드)다. 다중 노드 큐/객체 저장소·키 회전·
-  공개키 배포 채널은 운영자 범위다. → 정직한 라벨: **공개 공식 단일 노드 호스트형 MVP**.
-- 실제 고정 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자가 제공한다.
-- fastchess는 오라클 PGN 사후 검증이 없어 공식 검증 경로 밖이다.
+## 알려진 한계 (정직하게)
+- 호스트형 백엔드는 SQLite + 로컬 FS **단일 노드**다. 분산 프로덕션 서비스가 아니다.
+- 검증 e2e와 빌드 감옥/bench는 opt-in Docker 테스트다(CI는 비-docker 가드 + 호스트
+  g++ C++ 게이트 + strict-readiness/release-manifest CLI 스모크).
+- 실제 고정 Stockfish 빌드 래퍼와 실 bench/속도 기준은 운영자가 제공한다(토이 엔진은
+  bench 미지원 → NPS 강제 없음).
+- fastchess는 PGN 오라클 사후 검증 전까지 공식 검증 경로 밖이다.
+- 실제 hidden eval 팩·키·릴리스 매니페스트는 운영자 산출물이며 커밋하지 않는다.
 
 ## 다음 단계
-- fastchess PGN→오라클 사후 검증(통과 시 공식 경로 편입).
-- 다중 노드 큐/객체 저장소, 키 회전, 공개키 배포 채널 문서화.
-- 실제 고정 Stockfish 트러스트 빌드 래퍼 + bench 정합성 자동화.
+- 다중 노드 큐/객체 저장소, 키 회전, 공개키·릴리스 매니페스트 배포 채널.
+- 실 고정 Stockfish 트러스트 빌드 래퍼 + bench 정합성 자동화.
+- fastchess PGN→오라클 사후 검증.

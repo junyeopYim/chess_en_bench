@@ -264,16 +264,29 @@ def test_official_eval_rejects_demo_pack(tmp_path, monkeypatch):
             out_dir=tmp_path / "o", profile="official", engine_jail="docker")
 
 
+def test_official_eval_requires_pinned_pack(tmp_path, monkeypatch, official_pack):
+    # 1: a verified result needs the eval pack hash PINNED; with a trusted but
+    # unpinned pack it refuses (before evaluating).
+    import ceb.jail.docker_engine as de
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    with pytest.raises(OfficialEvalError, match="PINNED"):
+        run_official_eval(
+            run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
+            out_dir=tmp_path / "o", profile="official", engine_jail="docker")
+
+
 def test_official_eval_requires_ed25519_key(tmp_path, monkeypatch, official_pack):
-    # B: a verified result needs an Ed25519 key; with a trusted pack but no key
-    # it refuses (before evaluating).
+    # B: a verified result needs an Ed25519 key; with a trusted+pinned pack but
+    # no key it refuses (before evaluating).
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
     import ceb.jail.docker_engine as de
     monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
     monkeypatch.delenv("CEB_SIGNING_PRIVATE_KEY", raising=False)
     with pytest.raises(OfficialEvalError, match="Ed25519"):
         run_official_eval(
             run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
-            out_dir=tmp_path / "o", profile="official", engine_jail="docker")
+            out_dir=tmp_path / "o", profile="official", engine_jail="docker",
+            official_pack_hashes=[compute_eval_pack_hash(official_pack)])
 
 
 def test_dev_allow_demo_pack_is_never_verified(tmp_path, monkeypatch):
@@ -779,12 +792,14 @@ def test_verified_track_a_end_to_end_in_jail(tmp_path, official_pack):
     from ceb.hosted.verifier import verify_result_file
     from ceb.storage import public_artifacts
 
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
     generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
     os.environ["CEB_SIGNING_PRIVATE_KEY"] = str(tmp_path / "priv.pem")
     try:
         result = run_official_eval(
             run_id="v", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
             out_dir=tmp_path / "out", profile="official", engine_jail="docker",
+            official_pack_hashes=[compute_eval_pack_hash(official_pack)],
             mode_config=TINY_CONFIG)
     finally:
         os.environ.pop("CEB_SIGNING_PRIVATE_KEY", None)
@@ -799,3 +814,41 @@ def test_verified_track_a_end_to_end_in_jail(tmp_path, official_pack):
                                  public_key=load_public_key(tmp_path / "pub.pem"))
     assert verdict["authentic"] is True
     assert verdict["public_official_signing"] is True
+
+
+# ----- v0.3.3 API + promotion -------------------------------------------------
+
+def test_api_track_b_leaderboard_delegates(api_client):
+    # /api/leaderboard?track=B delegates to the hosted verified board (the
+    # api_client DB exists) instead of claiming there is no Track B leaderboard.
+    body = api_client.get("/api/leaderboard?track=B").json()
+    assert "hosted/leaderboard?track=B" in body.get("note", "")
+    assert body.get("verified_only") is True
+
+
+def test_api_public_readiness_has_no_secrets(api_client):
+    body = api_client.get("/api/hosted/readiness/public").json()
+    assert body["schema"] == "ceb.hosted.readiness.public/v1"
+    assert body["smoke_verifiable"] is False
+    assert body["official_verifiable"] is True
+    blob = json.dumps(body)
+    assert "PRIVATE" not in blob and "priv" not in blob and "token" not in blob
+
+
+def test_failed_leak_scan_leaves_no_public_artifacts(tmp_path, monkeypatch):
+    # req 7: a failed leak scan must leave ZERO public manifest entries anywhere.
+    import ceb.rounds.round_runner as rr
+    from ceb.storage import public_artifacts
+    from ceb.storage.artifacts import MANIFEST_NAME
+
+    monkeypatch.setattr(rr, "make_feedback",
+                        lambda report: {"leaked": "8/8/8/3k4/8/8/4Q3/4K3"})
+    out = tmp_path / "out"
+    with pytest.raises(OfficialEvalError, match="leak"):
+        run_official_eval(run_id="x", snapshot=EXAMPLE,
+                          eval_pack_dir=str(TINY_PACK), out_dir=out,
+                          quick_test_mode=True)
+    public = []
+    for manifest in out.rglob(MANIFEST_NAME):
+        public += public_artifacts(manifest.parent)
+    assert public == []  # nothing promoted to public on a failed scan

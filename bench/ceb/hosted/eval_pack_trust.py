@@ -107,16 +107,27 @@ def _read_registry_hashes(registry_path):
     return out
 
 
-def resolve_allowed_hashes(*, environ=None, cli_hashes=None, registry_path=None):
-    """Merge official-pack hash allowlists from env, CLI, and a registry file."""
+def resolve_hash_allowlist(*, env_var=None, environ=None, cli_hashes=None,
+                           registry_path=None):
+    """Merge a hash allowlist from an env var (comma-separated), CLI values
+    (repeat/comma), and a registry file (JSON {"hashes":[...]} / list / lines).
+    Reused for eval-pack, Track B baseline, and build-wrapper allowlists."""
     out = set()
-    raw = (environ if environ is not None else os.environ).get(ENV_OFFICIAL_HASHES)
-    if raw:
-        out |= {h.strip() for h in raw.split(",") if h.strip()}
+    if env_var:
+        raw = (environ if environ is not None else os.environ).get(env_var)
+        if raw:
+            out |= {h.strip() for h in raw.split(",") if h.strip()}
     for entry in (cli_hashes or []):
         out |= {h.strip() for h in str(entry).split(",") if h.strip()}
     out |= _read_registry_hashes(registry_path)
     return out
+
+
+def resolve_allowed_hashes(*, environ=None, cli_hashes=None, registry_path=None):
+    """Merge official eval-pack hash allowlists from env, CLI, and a registry."""
+    return resolve_hash_allowlist(
+        env_var=ENV_OFFICIAL_HASHES, environ=environ, cli_hashes=cli_hashes,
+        registry_path=registry_path)
 
 
 def validate_official_eval_pack(private_dir, *, track, root=None,
@@ -160,7 +171,8 @@ def validate_official_eval_pack(private_dir, *, track, root=None,
             "eval pack is declared for track %s but this is a track %s "
             "evaluation" % (manifest_track, want))
 
-    if _is_committed_demo_path(private_dir, root) and not allow_demo:
+    on_demo_path = _is_committed_demo_path(private_dir, root)
+    if on_demo_path and not allow_demo:
         raise EvalPackTrustError(
             "eval pack lives under a committed/demo path (examples/ or tests/); "
             "a public official eval pack must be operator-private and outside "
@@ -186,5 +198,9 @@ def validate_official_eval_pack(private_dir, *, track, root=None,
         "pack_hash": pack_hash,
         "manifest_hash": manifest_hash,
         "allowlist_checked": bool(allow),
-        "demo_path_allowed": bool(allow_demo),
+        # True only when the demo-path bypass was actually USED (the pack is on
+        # a committed/demo path AND allow_demo bypassed the check). A genuine
+        # off-repo pack is not poisoned just because --dev-allow-demo-pack was
+        # passed.
+        "demo_path_allowed": bool(allow_demo and on_demo_path),
     }

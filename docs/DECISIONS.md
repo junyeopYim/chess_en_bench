@@ -1,5 +1,10 @@
 # 결정 사항
 
+- 2026-06-13 — v0.3.3: 공개 공식 verified는 eval 팩 내용 해시가 허용목록에 핀되어야 한다(`--official-pack-hash` 등); 미핀이면 거부, `--dev-allow-unpinned-pack`은 diagnostic-unpinned-pack(미검증). 자기선언 매니페스트만으로는 부족하다.
+- 2026-06-13 — v0.3.3: Track B verified 베이스라인은 stockfish-lock(HEAD가 stockfish.lock과 일치) 또는 hash 허용목록으로 신뢰되어야 하며, 빌드 래퍼는 해시 핀이 필요하다(`baseline_trust.py`, `--build-wrapper-hash`); toy/미핀은 dev 플래그로만 진단 강등.
+- 2026-06-13 — v0.3.3: 빌드 감옥 출력은 사용 전 검증한다(엔진 정규/실행 가능, 트리 심볼릭 거부, 512MiB/10000파일 한도) + bench/속도 검사로 NPS 비율 기록(양쪽 지원 시에만 임계값 강제).
+- 2026-06-13 — v0.3.3: 신뢰 앵커 게이트는 순차적이다 — 첫 미신뢰 앵커가 dev 플래그면 강등(등급 1회 기록), 아니면 하드 실패; 이미 강등되면 이후 앵커는 하드 실패시키지 않는다.
+- 2026-06-13 — v0.3.3: 공개 공식 선언은 `ceb hosted readiness check --strict-public-official`(스키마 readiness/v2)가 모든 앵커를 차단성으로 점검해 통과할 때만. 시즌 앵커는 비밀 없는 `ceb.release_manifest/v1`로 게시(공개키는 지문만).
 - 2026-06-13 — v0.3.2: verified는 신뢰된 공식 평가 팩만 사용한다 — `ceb.eval_pack.manifest/v1` 매니페스트 + 저장소 밖 경로 + 선택적 해시 허용목록(`bench/ceb/hosted/eval_pack_trust.py`). 커밋된 데모 팩(tiny_private)은 매니페스트가 없어 절대 verified가 될 수 없다(smoke 전용).
 - 2026-06-13 — v0.3.2: verified는 Ed25519 서명을 요구한다 — 키 없으면 평가 전 거부(또는 `--dev-allow-unsigned`로 diagnostic-unsigned). HMAC은 공개 공식 verified 불가(레거시 진단용). 검증기는 verified+비-ed25519를 authentic=false로 본다.
 - 2026-06-13 — v0.3.2: Track B 후보 빌드는 신뢰된 운영자 래퍼(후보 트리 밖)가 Docker 빌드 감옥에서 수행한다(`build_jail.py`) — 후보 소유 빌드 스크립트의 호스트 실행은 진단 전용이며 verified=false. 베이스라인·후보는 동일 래퍼로 빌드한다.

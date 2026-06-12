@@ -14,6 +14,15 @@
 | CLI | `ceb hosted leaderboard --db --track` | `ceb leaderboard compute --track --results` |
 | API | `GET /api/hosted/leaderboard?track=A` | `GET /api/leaderboard?track=A` |
 
+`GET /api/leaderboard?track=B`는 미검증 로컬 보드 경로이지만 호스티드 DB가 있으면
+검증된 호스티드 Track B 보드(`verified_leaderboard(conn, track="B")`)로 **위임**하고
+(`note`로 `GET /api/hosted/leaderboard?track=B`를 안내), 호스티드 DB가 없으면 빈
+항목과 함께 그 경로를 가리킨다(`bench/ceb/api/main.py`). 비밀 없는
+`GET /api/hosted/readiness/public`(스키마 `ceb.hosted.readiness.public/v1`)는 버전,
+프로파일 verifiable 여부, 리더보드 정책만 노출한다 — 운영자 앵커(팩·키·이미지)는
+`ceb hosted readiness check --strict-public-official` CLI에서만 점검한다. 관리자
+POST/업로드 엔드포인트는 `CEB_ADMIN_TOKEN`이 설정되지 않으면 503으로 유지된다.
+
 ## 검증됨 대 미검증
 
 **호스티드 공식 워커만 `verified:true`를 발행한다.** 결과는
@@ -24,14 +33,19 @@
 1. 비공개 eval 팩 필수(없으면 거부),
 2. **엔진 감옥 가드**: verifiable 프로파일은 `engine_jail == docker`가 아니면
    평가 전에 검증을 거부한다(P0.1),
-3. **신뢰 공식 eval 팩 가드 (A)**: 검증된 결과는 운영자 OFFICIAL 팩을 요구한다
-   (`bench/ceb/hosted/eval_pack_trust.py`, `validate_official_eval_pack`). 팩에는
-   `manifest.json`(스키마 `ceb.eval_pack.manifest/v1`, 키 `pack_id` / `name` /
-   `track` / `season` / `official: true` / `visibility: "private"` /
-   `openings_mode`)이 있어야 하고, 리포의 `examples/` · `tests/` **밖**에 살아야
-   한다(`--dev-allow-demo-pack`만이 이 경로 검사를 우회). 운영자 허용목록이 주어지면
-   (env `CEB_OFFICIAL_EVAL_PACK_HASHES`, CLI `--official-pack-hash`,
-   `--official-pack-registry`) 팩 콘텐츠 해시가 그 안에 있어야 한다,
+3. **신뢰 + 핀 고정 공식 eval 팩 가드 (A, req1)**: 검증된 결과는 운영자 OFFICIAL
+   팩을 요구한다(`bench/ceb/hosted/eval_pack_trust.py`,
+   `validate_official_eval_pack`). 팩에는 `manifest.json`(스키마
+   `ceb.eval_pack.manifest/v1`, 키 `pack_id` / `name` / `track` / `season` /
+   `official: true` / `visibility: "private"` / `openings_mode`)이 있어야 하고,
+   리포의 `examples/` · `tests/` **밖**에 살아야 한다(`--dev-allow-demo-pack`만이 이
+   경로 검사를 우회). 나아가 공식 검증은 팩 콘텐츠 해시가 운영자 허용목록에 **핀
+   고정**되어 있어야 한다(env `CEB_OFFICIAL_EVAL_PACK_HASHES`, CLI
+   `--official-pack-hash`, `--official-pack-registry` 중 하나로 공급;
+   `official_eval.py` / `track_b_eval.py`가 강제). 허용목록이 **전혀 없으면** 검증은
+   평가 전에 **실패**하며, `--dev-allow-unpinned-pack`만이 결과를 강제로
+   `verified: false`(grade `diagnostic-unpinned-pack`)로 강등시킨다. `smoke`는
+   여전히 데모 팩을 미검증으로 사용한다,
 4. **Ed25519 서명 가드 (B)**: 검증된 결과는 Ed25519 비공개 키
    (env `CEB_SIGNING_PRIVATE_KEY` 또는 `--signing-key`)를 요구한다. 키가 없으면
    평가 전에 검증을 거부하며, `--dev-allow-unsigned`는 결과를 강제로
@@ -68,6 +82,28 @@
 **항상 `verified=false`**이고, `run_official_track_b`는 `build_isolation="host"`로
 `verified=True`를 거부한다. 결과 메타데이터는 `build_isolation`(`"jail"` /
 `"host"`)을 기록한다.
+
+검증된 Track B는 세 가지 추가 신뢰 앵커도 통과해야 한다(없으면 dev 플래그가
+`verified=false` 진단으로 강등):
+
+- **베이스라인 신뢰 (req3)**: `validate_track_b_baseline`
+  (`bench/ceb/track_b/baseline_trust.py`)이 베이스라인을 stockfish-lock(git HEAD가
+  `tracks/b_stockfish_opt/stockfish.lock` 커밋과 일치), hash
+  (`--track-b-baseline-hash` / `CEB_TRACK_B_BASELINE_HASHES` /
+  `--track-b-baseline-registry`), 또는 toy(`--dev-allow-toy-baseline`,
+  `verified=false` grade `diagnostic-untrusted-baseline`)로 검증한다. 메타데이터
+  `track_b`에 `baseline_trusted` / `baseline_trust_mode` / `baseline_tree_hash` /
+  `stockfish_lock`을 기록한다.
+- **빌드 래퍼 해시 핀 (req4)**: 래퍼 파일 해시가 허용목록(`--build-wrapper-hash` /
+  `CEB_TRACK_B_BUILD_WRAPPER_HASHES` / `--build-wrapper-registry`)에 핀 고정되어야
+  한다(`bench/ceb/hosted/build_wrappers.py`); 아니면 `--dev-allow-unpinned-wrapper`로
+  `verified=false` grade `diagnostic-untrusted-wrapper`. 메타데이터 `track_b`에
+  `build_wrapper_hash` / `build_wrapper_trusted` / `build_isolation` /
+  `build_jail_image_digest`를 기록한다.
+- **벤치/속도 정합성 (req6)**: 두 엔진이 bench를 실행하고 엔진별 nodes/nps/output_hash와
+  `nps_ratio`를 보고한다(`bench/ceb/track_b/bench_sanity.py`). NPS 비율 임계값
+  (`--bench-min-nps-ratio`, 기본 0.3)은 두 엔진 모두 bench를 지원할 때만 강제되며
+  (toy 엔진은 `supported=false`로 허용), `--dev-allow-no-bench`가 NPS 실패를 건너뛴다.
 
 **`smoke` 프로파일(=`--quick-test-mode`)은 결코 verified가 아니다.** 프로파일이
 verifiable이 아니므로 어떤 플래그를 줘도 verified 결과를 만들 수 없다("마법 같은
@@ -150,6 +186,16 @@ verified 결과는 `track_b_official` 모드로 final-tier에 들어간다.
   (HMAC·미서명은 결코 공개 공식 진정성을 얻지 못한다). 누구나 게시된 운영자 공개
   키로 `ceb hosted verify-result --public-key`로 독립 확인할 수 있다
   (`docs/RESULT_SIGNING.md` 참조).
+- **운영자 공개키 지문과 배포 경로를 게시한다 (req2).** 공개 리더보드는 운영자
+  **공개키 지문**(`operator_public_key_fingerprint`)과 그 키의 배포 경로를 게시해,
+  검증자가 별도로 공급할 공개 키의 출처를 알 수 있게 한다. 이 지문은 비밀 없는 릴리스
+  매니페스트(`ceb hosted release-manifest create`, 스키마 `ceb.release_manifest/v1`,
+  `bench/ceb/hosted/release_manifest.py`)에 실리며, **키 자체는 결코 게시하지 않는다**.
+  `--strict-public-official` 엄격 readiness는 로드 가능한 Ed25519 비공개 키, 로드
+  가능한 공개 키, 그리고 둘의 **키페어 일치**(비공개 키의 `public_key()` 지문이 공급된
+  공개 키 지문과 동일)를 모두 BLOCKING 요구로 강제하며, 보고서에 공개키 지문을 담는다
+  (`bench/ceb/hosted/readiness.py`, 체크 `ed25519_signing_key` /
+  `public_key_verify_ready` / `keypair_match`).
 - **검증된 결과 전용이 공개용 기본값이다.** `ceb hosted leaderboard`와
   `GET /api/hosted/leaderboard`는 검증된 항목만 반환한다. 미검증 로컬
   보드는 순위 발행이 아니라 자가 점검을 위해 존재한다.

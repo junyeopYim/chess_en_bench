@@ -205,6 +205,9 @@ def test_hosted_track_b_verified_in_jail(tmp_path):
     from ceb.hosted.track_b_eval import track_b_score, TRACK_B_RESULT_MODE
     from conftest import make_official_pack
 
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    from ceb.hosted.build_wrappers import compute_wrapper_hash
+    from ceb.hosted.metadata import hash_directory
     baseline = tmp_path / "baseline"
     candidate = tmp_path / "candidate"
     _fake_tree(baseline, 1)
@@ -220,6 +223,9 @@ def test_hosted_track_b_verified_in_jail(tmp_path):
             build_script="ceb_build.sh", engine_relpath="ceb_engine",
             eval_pack_dir=str(pack), out_dir=tmp_path / "out",
             engine_jail="docker", profile="official", build_wrapper=str(wrapper),
+            official_pack_hashes=[compute_eval_pack_hash(pack)],          # pinned (1)
+            track_b_baseline_hashes=[hash_directory(baseline)],          # trusted baseline (3)
+            build_wrapper_hashes=[compute_wrapper_hash(wrapper)],        # pinned wrapper (4)
             games=2, movetime_ms=30, max_plies=20, root=REPO_ROOT)
     finally:
         os.environ.pop("CEB_SIGNING_PRIVATE_KEY", None)
@@ -228,6 +234,9 @@ def test_hosted_track_b_verified_in_jail(tmp_path):
     assert report["verification_grade"] == "verified-official"
     assert report["signature"]["algorithm"] == "ed25519"
     assert report["build_isolation"] == "jail"
+    tb = report["metadata"]["track_b"]
+    assert tb["baseline_trusted"] is True and tb["baseline_trust_mode"] == "hash"
+    assert tb["build_wrapper_trusted"] is True
     assert Path(result_path).is_file()
 
     db = hosted_db.init_db(tmp_path / "h.sqlite")
@@ -243,3 +252,235 @@ def test_hosted_track_b_verified_in_jail(tmp_path):
     finally:
         conn.close()
     assert [e["run_id"] for e in board["entries"]] == ["tbrun"]
+
+
+# ----- v0.3.3 trust anchors ---------------------------------------------------
+
+def test_baseline_trust_hash_mode(tmp_path):
+    from ceb.track_b.baseline_trust import validate_track_b_baseline
+    from ceb.hosted.metadata import hash_directory
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "f.cpp").write_text("int x;\n")
+    rep = validate_track_b_baseline(base, root=REPO_ROOT,
+                                    allowed_hashes=[hash_directory(base)])
+    assert rep["baseline_trusted"] is True
+    assert rep["baseline_trust_mode"] == "hash"
+
+
+def test_baseline_trust_toy_and_untrusted(tmp_path):
+    from ceb.track_b.baseline_trust import (
+        validate_track_b_baseline, BaselineTrustError)
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "f.cpp").write_text("int x;\n")
+    toy = validate_track_b_baseline(base, root=REPO_ROOT, allow_toy=True)
+    assert toy["baseline_trusted"] is False and toy["baseline_trust_mode"] == "toy"
+    with pytest.raises(BaselineTrustError):
+        validate_track_b_baseline(base, root=REPO_ROOT)
+
+
+def test_baseline_trust_stockfish_lock_mode(tmp_path, monkeypatch):
+    import subprocess
+    import ceb.track_b.baseline_trust as bt
+    base = tmp_path / "sf"
+    base.mkdir()
+    (base / "a.cpp").write_text("int x;\n")
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    import os
+    e = {**os.environ, **env}
+    subprocess.run(["git", "init", "-q", str(base)], check=True)
+    subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"],
+                   check=True, env=e)
+    head = subprocess.run(["git", "-C", str(base), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    monkeypatch.setattr(bt, "load_lock", lambda root=None: {
+        "commit": head[:7], "tag": "sf_18", "release": "Stockfish 18"})
+    rep = bt.validate_track_b_baseline(base, root=REPO_ROOT, allow_toy=True)
+    assert rep["baseline_trusted"] is True
+    assert rep["baseline_trust_mode"] == "stockfish-lock"
+    assert rep["stockfish_lock"]["tag"] == "sf_18"
+
+
+def test_validate_build_output(tmp_path):
+    import os
+    from ceb.track_b.build_jail import validate_build_output, BuildJailError
+    out = tmp_path / "out"
+    out.mkdir()
+    with pytest.raises(BuildJailError, match="regular engine"):
+        validate_build_output(out, "engine")
+    (out / "engine").write_text("#!/bin/sh\n")
+    (out / "engine").chmod(0o755)
+    assert validate_build_output(out, "engine").name == "engine"
+    os.symlink("/etc/passwd", out / "link")
+    with pytest.raises(BuildJailError, match="symlink"):
+        validate_build_output(out, "engine")
+    os.remove(out / "link")
+    with pytest.raises(BuildJailError, match="bytes"):
+        validate_build_output(out, "engine", max_bytes=1)
+
+
+def test_bench_sanity_unsupported(tmp_path):
+    from ceb.track_b.bench_sanity import run_bench_sanity
+    eng = tmp_path / "e.sh"
+    eng.write_text("#!/bin/sh\nwhile read line; do :; done\n")
+    eng.chmod(0o755)
+    rep = run_bench_sanity([str(eng)], [str(eng)], timeout_s=5)
+    assert rep["supported"] is False
+    assert rep["passed"] is True          # unsupported is not a failure
+
+
+def test_bench_sanity_nps_threshold(monkeypatch):
+    from ceb.track_b import bench_sanity
+    monkeypatch.setattr(bench_sanity, "run_bench", lambda cmd, **kw: {
+        "supported": True, "nodes": 1000, "nps": int(cmd[0]),
+        "output_hash": "sha256:x"})
+    rep = bench_sanity.run_bench_sanity(["1000000"], ["100000"], min_nps_ratio=0.5)
+    assert rep["supported"] is True
+    assert rep["nps_ratio"] == 0.1
+    assert rep["passed"] is False         # 0.1 < 0.5
+
+
+def test_hosted_track_b_trust_gates(tmp_path, monkeypatch):
+    # Exercise the verified Track B trust gates without docker by stubbing the
+    # actual build+match (run_official_track_b).
+    import os
+    import ceb.hosted.track_b_eval as tbe
+    from ceb.hosted.signing import generate_keypair
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    from ceb.hosted.build_wrappers import write_demo_wrapper, compute_wrapper_hash
+    from ceb.hosted.metadata import hash_directory
+    from conftest import make_official_pack
+
+    captured = {}
+
+    def fake_official(**kw):
+        captured.clear()
+        captured.update(kw)
+        return {"verified": kw["verified"], "profile": kw["profile"],
+                "verification_grade": kw["verification_grade"],
+                "score": {"final_delta_elo": 0.0},
+                "signature": {"algorithm": "ed25519" if kw["verified"] else None},
+                "metadata": {"track_b": {}}}
+
+    monkeypatch.setattr(tbe, "run_official_track_b", fake_official)
+    base = tmp_path / "baseline"
+    cand = tmp_path / "candidate"
+    _fake_tree(base, 1)
+    _fake_tree(cand, 2)
+    pack = make_official_pack(tmp_path / "pack")
+    wrapper = write_demo_wrapper(tmp_path / "wrapper.sh")
+    generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
+    monkeypatch.setenv("CEB_SIGNING_PRIVATE_KEY", str(tmp_path / "priv.pem"))
+
+    base_kwargs = dict(
+        run_id="g", candidate_src=cand, baseline_src=base,
+        build_script="ceb_build.sh", engine_relpath="ceb_engine",
+        eval_pack_dir=str(pack), out_dir=tmp_path / "out", engine_jail="docker",
+        profile="official", build_wrapper=str(wrapper), root=REPO_ROOT)
+    pins = dict(official_pack_hashes=[compute_eval_pack_hash(pack)],
+                track_b_baseline_hashes=[hash_directory(base)],
+                build_wrapper_hashes=[compute_wrapper_hash(wrapper)])
+
+    # All anchors pinned -> verified.
+    tbe.run_hosted_track_b(**base_kwargs, **pins)
+    assert captured["verified"] is True
+
+    # Unpinned wrapper, no dev flag -> hard fail.
+    no_wrap = dict(pins); no_wrap["build_wrapper_hashes"] = None
+    with pytest.raises(tbe.TrackBPipelineError, match="build wrapper hash"):
+        tbe.run_hosted_track_b(**base_kwargs, **no_wrap)
+
+    # Unpinned wrapper + dev flag -> diagnostic-untrusted-wrapper.
+    tbe.run_hosted_track_b(**base_kwargs, **no_wrap, allow_unpinned_wrapper=True)
+    assert captured["verified"] is False
+    assert captured["verification_grade"] == "diagnostic-untrusted-wrapper"
+
+    # Untrusted baseline + dev flag -> diagnostic-untrusted-baseline.
+    no_base = dict(pins); no_base["track_b_baseline_hashes"] = None
+    tbe.run_hosted_track_b(**base_kwargs, **no_base, allow_toy_baseline=True)
+    assert captured["verified"] is False
+    assert captured["verification_grade"] == "diagnostic-untrusted-baseline"
+
+    # Unpinned pack + dev flag -> diagnostic-unpinned-pack.
+    no_pack = dict(pins); no_pack["official_pack_hashes"] = None
+    tbe.run_hosted_track_b(**base_kwargs, **no_pack, allow_unpinned_pack=True)
+    assert captured["verified"] is False
+    assert captured["verification_grade"] == "diagnostic-unpinned-pack"
+
+
+# ----- v0.3.3 security-review regressions -------------------------------------
+
+def test_downgraded_run_without_wrapper_is_diagnostic_not_hard_fail(tmp_path,
+                                                                     monkeypatch):
+    # Regression (review #1): a run already downgraded by an earlier anchor and
+    # with NO build wrapper must produce a diagnostic (host build), not fail.
+    import ceb.hosted.track_b_eval as tbe
+    from ceb.hosted.signing import generate_keypair
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    from conftest import make_official_pack
+
+    captured = {}
+
+    def fake_official(**kw):
+        captured.clear(); captured.update(kw)
+        return {"verified": kw["verified"], "profile": kw["profile"],
+                "verification_grade": kw["verification_grade"],
+                "score": {"final_delta_elo": 0.0},
+                "signature": {"algorithm": None}, "metadata": {"track_b": {}}}
+
+    monkeypatch.setattr(tbe, "run_official_track_b", fake_official)
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    pack = make_official_pack(tmp_path / "pack")
+    generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
+    monkeypatch.setenv("CEB_SIGNING_PRIVATE_KEY", str(tmp_path / "priv.pem"))
+
+    # toy baseline (downgrade) + NO wrapper at all.
+    tbe.run_hosted_track_b(
+        run_id="g", candidate_src=cand, baseline_src=base,
+        build_script="ceb_build.sh", engine_relpath="ceb_engine",
+        eval_pack_dir=str(pack), out_dir=tmp_path / "out", engine_jail="docker",
+        profile="official", build_wrapper=None,
+        official_pack_hashes=[compute_eval_pack_hash(pack)],
+        allow_toy_baseline=True, root=REPO_ROOT)
+    assert captured["verified"] is False
+    assert captured["verification_grade"] == "diagnostic-untrusted-baseline"
+    assert captured["build_isolation"] == "host"   # fell back, did not hard-fail
+
+
+def test_baseline_lock_does_not_match_short_head_prefix(tmp_path, monkeypatch):
+    # Regression (review #3): a short HEAD that is a prefix of the lock commit
+    # must NOT be accepted as a stockfish-lock match.
+    import subprocess, os
+    import ceb.track_b.baseline_trust as bt
+    base = tmp_path / "sf"; base.mkdir(); (base / "a.cpp").write_text("x\n")
+    e = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    subprocess.run(["git", "init", "-q", str(base)], check=True)
+    subprocess.run(["git", "-C", str(base), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(base), "commit", "-q", "-m", "x"], check=True, env=e)
+    head = subprocess.run(["git", "-C", str(base), "rev-parse", "HEAD"],
+                          capture_output=True, text=True).stdout.strip()
+    # Lock commit = head + extra chars (so head is a prefix of the lock commit).
+    monkeypatch.setattr(bt, "load_lock", lambda root=None: {
+        "commit": head + "abc", "tag": "sf", "release": "x"})
+    with pytest.raises(bt.BaselineTrustError):
+        bt.validate_track_b_baseline(base, root=REPO_ROOT)
+
+
+def test_bench_candidate_suppressing_nps_fails(monkeypatch):
+    # Regression (review #4): baseline supports bench, candidate suppresses its
+    # NPS -> must fail, not silently pass.
+    from ceb.track_b import bench_sanity
+    monkeypatch.setattr(bench_sanity, "run_bench", lambda cmd, **kw:
+                        {"supported": True, "nodes": 1, "nps": 1_000_000,
+                         "output_hash": "sha256:x"} if cmd[0] == "base"
+                        else {"supported": False, "nodes": None, "nps": None,
+                              "output_hash": None})
+    rep = bench_sanity.run_bench_sanity(["base"], ["cand"])
+    assert rep["supported"] is True              # baseline is the reference
+    assert rep["candidate_bench_missing"] is True
+    assert rep["passed"] is False

@@ -36,9 +36,49 @@ BUILD_JAIL_IMAGE = docker_engine.JAIL_IMAGE  # reuse the toolchain jail image
 _CONTAINER_PREFIX = "ceb-tbbuild-"
 _DEFAULT_LIMITS = {"cpus": "2", "memory": "4g", "pids": "1024"}
 
+MAX_BUILD_OUTPUT_BYTES = 512 * 1024 * 1024   # 512 MiB
+MAX_BUILD_OUTPUT_FILES = 10_000
+
 
 class BuildJailError(RuntimeError):
     pass
+
+
+def validate_build_output(output_dir, engine_relpath, *,
+                          max_bytes=MAX_BUILD_OUTPUT_BYTES,
+                          max_files=MAX_BUILD_OUTPUT_FILES):
+    """Validate a build output tree before its engine is used (requirement 5).
+
+    Rejects a missing/non-executable/non-regular/symlinked engine, any symlink
+    in the tree, and oversized output (total bytes / file count). Returns the
+    resolved engine path."""
+    output_dir = Path(output_dir)
+    engine = output_dir / engine_relpath
+    total_bytes = 0
+    file_count = 0
+    for path in output_dir.rglob("*"):
+        if path.is_symlink():
+            raise BuildJailError(
+                "build output contains a symlink (%s); rejected"
+                % path.relative_to(output_dir).as_posix())
+        if path.is_file():
+            file_count += 1
+            if file_count > max_files:
+                raise BuildJailError(
+                    "build output has more than %d files" % max_files)
+            total_bytes += path.stat().st_size
+            if total_bytes > max_bytes:
+                raise BuildJailError(
+                    "build output exceeds %d bytes" % max_bytes)
+    if engine.is_symlink():
+        raise BuildJailError("built engine is a symlink; rejected")
+    if not engine.is_file():
+        raise BuildJailError(
+            "build did not produce a regular engine file at %r" % engine_relpath)
+    import os as _os
+    if not _os.access(engine, _os.X_OK):
+        engine.chmod(engine.stat().st_mode | 0o111)
+    return engine
 
 
 def _safe_mount_path(path, what):
@@ -115,13 +155,9 @@ def build_in_jail(source_dir, wrapper_path, engine_relpath, *, output_dir,
             "isolated build failed (exit %d): %s"
             % (proc.returncode, (proc.stderr or proc.stdout or "")[-500:]))
 
-    engine = output / engine_relpath
-    if not engine.is_file():
-        raise BuildJailError(
-            "trusted wrapper did not produce %r in the output dir"
-            % engine_relpath)
-    engine.chmod(engine.stat().st_mode | 0o111)
-    return engine
+    # Validate the build output (engine present/executable/regular, no
+    # symlinks, size/count limits) before the engine is ever run.
+    return validate_build_output(output, engine_relpath)
 
 
 def _kill(name):

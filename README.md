@@ -3,20 +3,27 @@
 통제되고 재현 가능한 조건에서 **체스 엔진을 처음부터 만들거나**(Track A) **Stockfish의
 탐색을 최적화하는**(Track B) LLM 코딩 에이전트를 위한 벤치마크 플랫폼이다.
 
-**v0.3.2는 "공개 공식 단일 노드 호스트형 MVP"다.** 핵심은 *우연히* `verified`가 만들어질
-수 없게 하는 것이다. 공개 공식 검증 결과는 오직 호스팅형 워커가 — 깨끗한 스냅샷, **신뢰되는
-공식 평가 팩**(저장소에 커밋된 데모 팩이 아님), 정적 스캔 통과, 엄격 게이트 통과, Docker
-**엔진 감옥(engine jail)**, (Track B) 신뢰되는 운영자 래퍼를 쓰는 **격리된 빌드 감옥(build
-jail)**, **스테이징된** 공개 아티팩트에 대한 누출 스캔 통과, **Ed25519 서명**, 소유권으로
-울타리 친 원자적 DB 기록을 모두 만족할 때만 — 생성한다. 신뢰할 수 없는 엔진은 자신의
-워크스페이스만 보이는 감옥에 갇히며(저장소·상대·비공개 팩은 절대 보이지 않음), 신뢰되는
-평가자는 호스트에 남는다. 평가 **프로파일**(`smoke`/`official`/`final-production`)이 결과가
-검증될 자격이 있는지를 결정한다 — `smoke`는 **절대 검증되지 않으며** 공식 리더보드에 오르지
-않는다. 공개 공식 검증 결과는 **반드시 Ed25519로 서명**되어야 하며(HMAC은 레거시/진단 전용),
-누구나 운영자 공개 키로 검증한다. 공개 아티팩트는 먼저 **스테이징(private)** 으로 기록되고
-누출 스캔을 통과해야만 **public**으로 승격되며, 결과는 **재현성 메타데이터**를 포함한다.
-기본 백엔드는 단일 노드(SQLite + 로컬 객체 저장소)이지만 다중 워커에 안전한 원자적 잡
-클레임을 갖춘다. 모든 v0.2/v0.3 명령은 변경 없이 그대로 동작한다.
+**v0.3.3은 "공개 공식 단일 노드 호스트형 벤치마크"다 — Track A와 Track B 모두에서.** 단,
+저장소가 공개 공식 단일 노드로 선언될 수 있는 것은 오직 `ceb hosted readiness check
+--strict-public-official`이 통과할 때뿐이다. 단일 노드(SQLite + 로컬 FS)라는 사실은 정직하게
+유지한다 — 분산 프로덕션 서비스가 아니다. 핵심은 *우연히* `verified`가 만들어질 수 없게 하는
+것이다. v0.3.2 위에 v0.3.3은 모든 신뢰 닻을 **고정(pinning)** 한다: 검증된 결과는 **핀된**
+신뢰 공식 평가 팩을 요구하고, Track B는 추가로 **신뢰되는 베이스라인** + **해시 핀된 빌드
+래퍼** + 검증된 빌드 출력 + bench 정합성을 요구하며, 모두 Ed25519 서명되고 엄격 준비 게이트를
+통과해야 한다. 공개 공식 검증 결과는 오직 호스팅형 워커가 — 깨끗한 스냅샷, **핀된 신뢰 공식
+평가 팩**(저장소에 커밋된 데모 팩이 아님), 정적 스캔 통과, 엄격 게이트 통과, Docker **엔진
+감옥(engine jail)**, (Track B) 신뢰되는 운영자 래퍼를 쓰는 **격리된 빌드 감옥(build jail)**,
+**스테이징된** 공개 아티팩트에 대한 누출 스캔 통과, **Ed25519 서명**, 소유권으로 울타리 친
+원자적 DB 기록을 모두 만족할 때만 — 생성한다. 신뢰할 수 없는 엔진은 자신의 워크스페이스만
+보이는 감옥에 갇히며(저장소·상대·비공개 팩은 절대 보이지 않음), 신뢰되는 평가자는 호스트에
+남는다. 평가 **프로파일**(`smoke`/`official`/`final-production`)이 결과가 검증될 자격이 있는지를
+결정한다 — `smoke`는 **절대 검증되지 않으며** 공식 리더보드에 오르지 않는다. 공개 공식 검증
+결과는 **반드시 Ed25519로 서명**되어야 하며(HMAC은 레거시/진단 전용), 누구나 **대역 외로 받은**
+운영자 공개 키로 검증한다. 공개 아티팩트는 먼저 **스테이징(private)** 으로 기록되고 누출 스캔을
+통과해야만 **public**으로 승격되며, 결과는 **재현성 메타데이터**를 포함한다. 한 시즌의 모든
+신뢰 닻을 공개하는 비밀 없는 **릴리스 매니페스트**(`ceb hosted release-manifest create`)를
+발행할 수 있다. 기본 백엔드는 단일 노드(SQLite + 로컬 객체 저장소)이지만 다중 워커에 안전한
+원자적 잡 클레임을 갖춘다. 모든 v0.2/v0.3 명령은 변경 없이 그대로 동작한다.
 
 ## 빠른 시작
 
@@ -29,16 +36,36 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev,server,hosted]"   # hosted extra adds Ed25519 signing (cryptography)
 
 ceb doctor                       # environment diagnosis
-pytest -q                        # 238 passed + 6 skipped (Docker tests opt-in: CEB_DOCKER_TESTS=1)
+pytest -q                        # 265 passed + 6 skipped (Docker tests opt-in: CEB_DOCKER_TESTS=1)
 ```
 
-공개 공식 호스팅형 배포를 운영하기 전에 준비 상태를 확인한다(`ceb` 버전 >= 0.3.2, DB 스키마,
-Docker + 감옥 이미지, **신뢰되는** 공식 평가 팩, 데모 팩 거부, Ed25519 서명/검증 키, 프로파일
-정책, `final-production` 게임 바닥선, Track B 빌드 래퍼, 관리자 토큰 등을 점검):
+공개 공식 호스팅형 배포를 운영하기 전에 준비 상태를 확인한다(`ceb` 버전 >= 0.3.3, DB 스키마,
+Docker + 감옥 이미지, **핀된 신뢰** 공식 평가 팩, 데모 팩 거부, Ed25519 서명 키 + 공개 키 +
+**키쌍 일치(keypair match)**, 프로파일 정책, `final-production` 게임 바닥선, Track B 빌드 래퍼,
+관리자 토큰 등을 점검. 보고서 스키마는 `ceb.hosted.readiness/v2`, 각 항목은
+`checks[name, ok, required, detail]`):
 
 ```bash
 ceb hosted readiness check --db runs/hosted.sqlite --eval-pack <official-pack> \
-    --public-key op.pub.pem --track A    # 준비 안 되면 0이 아닌 종료 코드, --json으로 보고서
+    --public-key op.pub.pem --official-pack-hash <sha256:...> --track A   # --json으로 보고서
+
+# 공개 공식 단일 노드(Track A+B)로 선언하려면 엄격 게이트를 통과해야 한다.
+# --strict-public-official은 핀/공개 키/키쌍 일치/베이스라인/래퍼 해시 닻을 경고가 아닌
+# BLOCKING(required)으로 승격시킨다. 통과 못 하면 0이 아닌 종료 코드.
+ceb hosted readiness check --db runs/hosted.sqlite --eval-pack <official-pack> \
+    --public-key op.pub.pem --signing-key op.pem --official-pack-hash <sha256:...> \
+    --track A --strict-public-official
+```
+
+한 시즌의 모든 공개 신뢰 닻을 고정하는 비밀 없는 릴리스 매니페스트(`ceb.release_manifest/v1`)를
+발행한다 — 벤치마크 버전 + git 커밋, 공식 팩 id/해시/매니페스트 해시, 운영자 공개 키 **지문**(키
+자체가 절대 아님), 엔진/빌드 감옥 이미지 다이제스트, (Track B) 핀된 베이스라인/빌드 래퍼 해시,
+리더보드 정책, 알려진 한계. 핀된 공식 팩 해시와 공개 키가 **필수**다:
+
+```bash
+ceb hosted release-manifest create --track A --eval-pack <official-pack> \
+    --official-pack-hash <sha256:...> --public-key op.pub.pem --out release_A.json
+# Track B는 추가로 --track-b-baseline-hash <sha256:...> --build-wrapper-hash <sha256:...>
 ```
 
 공개 게이트와 함께 번들된 예제 엔진에 대한 빠른 라운드를 실행한다:
@@ -97,11 +124,13 @@ ceb round run --track A --workspace <dir> --round 1 --eval-pack <private-pack> -
 기본값은 `docker`이며, 다중 워커에 안전한 원자적 잡 클레임을 사용한다. 기본 저장소는 SQLite와
 `<db>_store/` 객체 디렉터리다.
 
-**신뢰되는 공식 평가 팩.** 검증된 결과는 `manifest.json`(스키마 `ceb.eval_pack.manifest/v1`,
+**핀된 신뢰 공식 평가 팩.** 검증된 결과는 `manifest.json`(스키마 `ceb.eval_pack.manifest/v1`,
 `official: true`/`visibility: "private"`/`track`/`season`/`openings_mode` 등)을 갖추고
-저장소의 `examples/`·`tests/` **밖에** 사는 팩을 요구한다. 운영자는 선택적으로 팩 콘텐츠
-해시 허용 목록을 줄 수 있다(env `CEB_OFFICIAL_EVAL_PACK_HASHES`, `--official-pack-hash`,
-`--official-pack-registry`); 허용 목록이 있으면 팩 해시가 일치해야 한다. 커밋된 데모 팩
+저장소의 `examples/`·`tests/` **밖에** 사는 팩을 요구한다. v0.3.3부터 검증은 팩 콘텐츠 해시가
+**핀(pin)** 되어 있을 것을 요구한다(env `CEB_OFFICIAL_EVAL_PACK_HASHES`, `--official-pack-hash`,
+`--official-pack-registry`). 허용 목록이 **없으면** 평가 전에 `verified`가 **실패**한다.
+`--dev-allow-unpinned-pack`은 결과를 `verified: false` 등급 `diagnostic-unpinned-pack`으로
+강등시킨다. `smoke`는 여전히 핀 없이 데모 팩을 미검증으로 사용한다. 커밋된 데모 팩
 `examples/eval_packs/tiny_private`에는 공식 매니페스트가 없어 **절대 검증되지 않는다**(`smoke`
 프로파일에는 적합). 결과 메타데이터는 `eval_pack_id`/`eval_pack_hash`/
 `eval_pack_manifest_hash`/`eval_pack_trusted`/`eval_pack_track`/`eval_pack_season`을 기록한다.
@@ -119,7 +148,7 @@ ceb hosted submit --track A --workspace <dir> --run-id myrun --db runs/hosted.sq
 
 ceb hosted worker run-once --db runs/hosted.sqlite \
     --eval-pack <official-pack> --profile official \
-    --signing-key op.pem --official-pack-hash <sha256:...>   # --profile final-production for leaderboard-quality
+    --signing-key op.pem --official-pack-hash <sha256:...>   # 핀 필수; --profile final-production for leaderboard-quality
 ceb hosted result show  --run-id myrun --db runs/hosted.sqlite     # marks the selected best verified result
 ceb hosted leaderboard  --track A --db runs/hosted.sqlite          # verified results only; smoke never appears
 ceb hosted result export --run-id myrun --db runs/hosted.sqlite --out myrun.zip   # selected verified bundle
@@ -134,13 +163,20 @@ ceb hosted result export --run-id myrun --db runs/hosted.sqlite --out myrun.zip 
 누구나 운영자 공개 키로 결과를 검증한다:
 `ceb hosted verify-result --result <official_result.json> --public-key op.pub.pem`
 (Ed25519 필수; **반드시 대역 외(out-of-band)로 받은 공개 키로 검증해야 `authentic: true`**다 —
-결과에 박힌 키만으로는 `embedded-self-described`로 진정성을 주장하지 않는다. 키가 없으면 결과는
-명시적으로 `unsigned`이다). 동일한 작업이 `/api/hosted/...` 아래 HTTP로 노출된다. 관리자 업로드
-엔드포인트(`POST /api/hosted/runs/{run_id}/upload`)는 본문을 임시 파일로 **스트리밍**하며
+결과에 박힌 키만으로는 `signature_trust: embedded-self-described`로 자기 일관성만 확인하며
+진정성을 주장하지 않는다. 검증된 결과가 Ed25519가 아니면 `authentic: false`, 키가 없으면 결과는
+명시적으로 `unsigned`이다). 공개 리더보드는 운영자 공개 키 지문과 배포 경로를 함께 공개한다.
+동일한 작업이 `/api/hosted/...` 아래 HTTP로 노출된다. `GET /api/leaderboard?track=B`는 호스팅형
+DB가 있으면 검증된 호스팅형 Track B 리더보드로 위임하고(없으면 `GET /api/hosted/leaderboard?track=B`
+를 가리킨다), 비밀 없는 `GET /api/hosted/readiness/public`(스키마 `ceb.hosted.readiness.public/v1`)이
+버전·프로파일 검증성·정책을 노출한다(운영자 전용 닻은 노출하지 않으며 CLI 엄격 점검으로 본다).
+관리자 업로드 엔드포인트(`POST /api/hosted/runs/{run_id}/upload`)는 본문을 임시 파일로 **스트리밍**하며
 읽는 동안 200 MiB 상한(`_MAX_UPLOAD_BYTES`)을 강제하고, 안전 추출이 심볼릭/하드 링크·절대
 경로·traversal·비정규 파일을 거부한다 — 자체 본문 제한이 있는 리버스 프록시(예: nginx
-`client_max_body_size`) 뒤에 배포한다. 관리자 POST/업로드 엔드포인트는 `CEB_ADMIN_TOKEN`으로
-보호되고, 공개 GET 엔드포인트는 공개 아티팩트만 제공한다. 자세한 내용은
+`client_max_body_size`) 뒤에 배포한다. 관리자 POST/업로드 엔드포인트는 `CEB_ADMIN_TOKEN`이
+설정되지 않으면 **503**으로 비활성화되고, 공개 GET 엔드포인트는 공개 아티팩트만 제공한다.
+(API를 통한 Track B 아카이브 업로드는 향후 과제이며, 현재는 서버-로컬 `candidate_src`/`baseline_src`다.)
+자세한 내용은
 [docs/HOSTED_OPERATIONS.md](docs/HOSTED_OPERATIONS.md),
 [docs/LEADERBOARD_GOVERNANCE.md](docs/LEADERBOARD_GOVERNANCE.md),
 [docs/RESULT_SIGNING.md](docs/RESULT_SIGNING.md)를 참조한다.
@@ -196,6 +232,25 @@ ceb track-b official run --candidate-src <tree> [--baseline-src <tree>] \
 `build_isolation="host"`로는 `verified=True`를 거부한다. 내부 Python 러너가 기본값이자
 신뢰되는 기준이며, `--runner fastchess`는 선택적 대용량 백엔드다(공식 검증 경로 밖).
 
+**Track B 검증의 추가 닻(v0.3.3).** 검증된 Track B는 v0.3.2 위에 네 가지 닻을 더 요구한다.
+(1) **베이스라인 신뢰** — 베이스라인이 `stockfish-lock`(git HEAD가
+`tracks/b_stockfish_opt/stockfish.lock` 커밋과 일치) 또는 `hash`
+(`--track-b-baseline-hash`/`CEB_TRACK_B_BASELINE_HASHES`/`--track-b-baseline-registry`)로
+신뢰되어야 한다. `--dev-allow-toy-baseline`은 `verified: false` 등급
+`diagnostic-untrusted-baseline`을 준다. 메타데이터 `track_b`는 `baseline_trusted`/
+`baseline_trust_mode`/`baseline_tree_hash`/`stockfish_lock`을 기록한다. (2) **빌드 래퍼 해시
+핀** — 래퍼 파일 해시가 `--build-wrapper-hash`/`CEB_TRACK_B_BUILD_WRAPPER_HASHES`/
+`--build-wrapper-registry`로 핀되어야 한다. `--dev-allow-unpinned-wrapper`는 `verified: false`
+등급 `diagnostic-untrusted-wrapper`를 준다. 메타데이터는 `build_wrapper_hash`/
+`build_wrapper_trusted`/`build_isolation`/`build_jail_image_digest`를 기록한다. (3) **빌드 출력
+강화** — 감옥 빌드 후 엔진은 존재·실행 가능·정규 파일(심볼릭 링크 아님)이어야 하고, 출력 트리
+어디에도 심볼릭 링크가 없어야 하며, 총 크기 512 MiB·파일 10000개 이하여야 한다. 출력 트리
+해시는 `track_b.build_output`에 기록된다. (4) **bench/속도 정합성** — 두 엔진이 `bench`를
+실행해 엔진별 `nodes`/`nps`/`output_hash`와 `nps_ratio`를 기록한다. NPS 비율 임계값
+(`--bench-min-nps-ratio`, 기본 0.3)은 **두 엔진이 모두 bench를 지원할 때만** 강제된다(토이
+엔진은 `supported=false`로 허용). `--dev-allow-no-bench`는 NPS 실패를 건너뛴다. 실제 공개
+Track B는 bench를 지원하는 핀된 Stockfish를 필요로 한다.
+
 ## 평가가 실행되는 방식
 
 1. `ceb workspace prepare --track A --run-id myrun` — `runs/myrun/`을 생성한다.
@@ -223,11 +278,13 @@ ceb track-b official run --candidate-src <tree> [--baseline-src <tree>] \
 | `bench/ceb/jail/` | 엔진 감옥: `engine_jail.py`(프런트엔드), `docker_engine.py`(Docker 백엔드) — 신뢰할 수 없는 엔진만 가둔다 |
 | `bench/ceb/storage/` | 아티팩트 가시성 모델(`artifacts_manifest.json`; 공개는 기본 거부), `promotion.py`(스테이징→누출 스캔→public 승격) |
 | `bench/ceb/scan/` | 정적 부정행위 방지 스캐너(`scan workspace`, `scan track-b`), 공개 아티팩트 누출 스캐너 |
-| `bench/ceb/hosted/` | 호스팅형 파이프라인: SQLite db, 제출물, 공식 워커, 메타데이터, 서명, 검증자, `eval_pack_trust.py`(신뢰 팩), `build_wrappers.py`(신뢰 빌드 래퍼), `result_bundle.py`(선택-번들), `readiness.py`(준비 점검) |
+| `bench/ceb/hosted/` | 호스팅형 파이프라인: SQLite db, 제출물, 공식 워커, 메타데이터, 서명, 검증자, `eval_pack_trust.py`(핀된 신뢰 팩), `build_wrappers.py`(신뢰 빌드 래퍼 + 해시 핀), `result_bundle.py`(선택-번들), `readiness.py`(엄격 준비 게이트), `release_manifest.py`(비밀 없는 릴리스 매니페스트) |
 | `bench/ceb/sanitize.py` | 비공개 안전 오류(`SanitizedError`, `sanitize_exception`) |
 | `bench/ceb/match/fastchess_runner.py` | 선택적 fastchess 백엔드(내부 러너가 기본 기준) |
 | `bench/ceb/track_b/official_pipeline.py` | Track B 소스 우선 파이프라인(스캔 → 빌드 → 쌍지어진 매치 → 서명된 결과; `build_isolation` jail/host) |
-| `bench/ceb/track_b/build_jail.py` | 격리된 Track B 빌드 감옥(`build_in_jail`; 신뢰 래퍼로 baseline+candidate 빌드) |
+| `bench/ceb/track_b/build_jail.py` | 격리된 Track B 빌드 감옥(`build_in_jail`; 신뢰 래퍼로 baseline+candidate 빌드, `validate_build_output` 출력 강화) |
+| `bench/ceb/track_b/baseline_trust.py` | Track B 베이스라인 신뢰(`validate_track_b_baseline`; stockfish-lock/hash/toy) |
+| `bench/ceb/track_b/bench_sanity.py` | Track B bench/속도 정합성(`run_bench_sanity`; nodes/nps/nps_ratio) |
 | `bench/ceb/sandbox/` | 레거시 컨테이너 내 하니스 `--sandbox docker`(호환용; 호스팅형 경로 아님) |
 | `tracks/` | 트랙 설정, 공개 데이터(`openings_public.jsonl` 포함), 프롬프트, 채점/페널티 표 |
 | `specs/` | 규범적 계약(UCI 부분집합, perft 확장, 제출, 피드백, 금지 동작) |
@@ -248,19 +305,22 @@ ceb track-b official run --candidate-src <tree> [--baseline-src <tree>] \
 - 제출된 엔진은 **신뢰할 수 없다**: argv 전용 스폰, 모든 읽기에 타임아웃, 출력 수신량 제한,
   프로세스 그룹 종료, 그리고 선택적 엔진 감옥. [docs/security.md](docs/security.md)를 참조한다.
 - **검증됨 대 미검증:** 호스팅형 워커만, verifiable 프로파일(`official`/
-  `final-production`) + Docker 엔진 감옥 + **신뢰되는 공식 팩** + **Ed25519 서명** + (Track B)
-  격리된 빌드 감옥 + 스테이징된 공개 아티팩트 누출 스캔 통과 시에만 `verified: true`를
-  기록한다. 검증 등급은 `verified-official`/`verified-final-production`이며, 다운그레이드
-  진단 등급으로 `diagnostic-smoke`/`diagnostic-unjailed`/`diagnostic-unsigned`/
-  `diagnostic-untrusted-pack`가 있다. 로컬 라운드, `smoke` 프로파일, 직접 실행한 Track B CLI
-  실행은 자가 보고 진단이다. 검증자(`verify-result`)는 verified 결과가 Ed25519가 아니거나
-  대역 외 공개 키 없이 검증되면 `authentic: false`로 표시한다.
+  `final-production`) + Docker 엔진 감옥 + **핀된 신뢰 공식 팩** + **Ed25519 서명** + (Track B)
+  격리된 빌드 감옥 + **신뢰 베이스라인** + **핀된 빌드 래퍼** + bench 정합성 + 스테이징된 공개
+  아티팩트 누출 스캔 통과 시에만 `verified: true`를 기록한다. 검증 등급은
+  `verified-official`/`verified-final-production`이며, 다운그레이드 진단 등급으로
+  `diagnostic-smoke`/`diagnostic-unjailed`/`diagnostic-unsigned`/`diagnostic-untrusted-pack`/
+  `diagnostic-unpinned-pack`/`diagnostic-untrusted-baseline`/`diagnostic-untrusted-wrapper`/
+  `diagnostic-no-bench`가 있다. 로컬 라운드, `smoke` 프로파일, 직접 실행한 Track B CLI 실행은
+  자가 보고 진단이다. 검증자(`verify-result`)는 verified 결과가 Ed25519가 아니거나 대역 외 공개
+  키 없이 검증되면 `authentic: false`로 표시한다.
 - 기계가 읽을 수 있는 모든 것은 버전이 명시된 JSON 스키마를 사용한다
   (`ceb.gate.report/v1`, `ceb.round.report.public/v1`,
   `ceb.hosted.official_result/v2`, `ceb.hosted.leaderboard/v2`,
   `ceb.eval_pack.manifest/v1`, `ceb.eval_pack.trust/v1`,
-  `ceb.hosted.readiness/v1`, `ceb.hosted.result_bundle/v1`,
-  `ceb.scan.workspace/v1`, `ceb.scan.leak/v1`, …).
+  `ceb.hosted.readiness/v2`, `ceb.hosted.readiness.public/v1`,
+  `ceb.release_manifest/v1`, `ceb.track_b.bench_sanity/v1`,
+  `ceb.hosted.result_bundle/v1`, `ceb.scan.workspace/v1`, `ceb.scan.leak/v1`, …).
   [docs/overview.md](docs/overview.md)를 참조한다.
 
 라이선스: MIT([LICENSE](LICENSE) 참조). Stockfish는 GPLv3이며 이 저장소와 함께

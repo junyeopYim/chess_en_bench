@@ -74,20 +74,38 @@ jobs:
             echo "ERROR: official profile produced a result without the engine jail"; exit 1
           fi
 
-      - name: Official readiness check (demo pack -> NOT READY)
+      - name: Strict official readiness (demo pack -> NOT READY)
         run: |
-          # With the committed demo pack and no docker/key this must report NOT
-          # READY (nonzero), and the demo_pack_rejected guard must pass.
-          ceb hosted readiness check --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --track A --json > /tmp/readiness.json || true
+          # With the committed demo pack, no docker, and no keys this must
+          # report NOT READY (nonzero); the demo_pack_rejected guard must pass.
+          ceb hosted readiness check --strict-public-official --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --track A --json > /tmp/readiness.json || true
           python - <<'PY'
           import json
           r = json.load(open("/tmp/readiness.json"))
           checks = {c["name"]: c for c in r["checks"]}
+          assert r["schema"] == "ceb.hosted.readiness/v2"
+          assert r["strict_public_official"] is True
           assert r["ready"] is False, "demo-pack deployment must not be ready"
           assert checks["official_eval_pack_trusted"]["ok"] is False
+          assert checks["official_pack_pinned"]["required"] is True   # strict
           assert checks["demo_pack_rejected"]["ok"] is True
-          print("readiness check OK (NOT READY as expected; demo pack rejected)")
+          print("strict readiness OK (NOT READY as expected; demo pack rejected)")
           PY
+
+      - name: Release manifest (Track A, secret-free)
+        run: |
+          ceb hosted keygen --private-key /tmp/rel_priv.pem --public-key /tmp/rel_pub.pem
+          # Build a temporary official pack outside the repo and pin its hash.
+          python - <<'PY'
+          import sys; sys.path.insert(0, "tests")
+          from conftest import make_official_pack, official_pack_hash
+          p = make_official_pack("/tmp/rel_pack")
+          open("/tmp/rel_hash.txt", "w").write(official_pack_hash(p))
+          PY
+          ceb hosted release-manifest create --track A --eval-pack /tmp/rel_pack \
+            --public-key /tmp/rel_pub.pem --official-pack-hash "$(cat /tmp/rel_hash.txt)" \
+            --out /tmp/release_manifest.json
+          python -c "import json; m=json.load(open('/tmp/release_manifest.json')); assert m['schema']=='ceb.release_manifest/v1'; assert 'PRIVATE' not in json.dumps(m); print('release manifest OK')"
 
       - name: Result signing (Ed25519 keygen + sign + verify)
         run: |

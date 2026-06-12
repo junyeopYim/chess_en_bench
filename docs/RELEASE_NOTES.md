@@ -3,6 +3,41 @@
 버전 번호는 패키지 버전이다(`pyproject.toml`, `bench/ceb/__init__.py`). 각 릴리스는
 이전 CLI 명령이 계속 동작하도록 유지한다.
 
+## v0.3.3 — 최종 공개 공식 하드닝 (단일 노드)
+
+테마: 모든 공개 공식 신뢰 앵커를 **핀(pin)** 하고, 단일 명령
+(`ceb hosted readiness check --strict-public-official`)이 통과할 때만 공개 공식
+준비 완료로 선언한다. "단일 노드"는 정직하게 유지한다(SQLite + 로컬 FS).
+
+- **eval 팩 해시 핀 필수(req 1)**: verified는 팩 내용 해시가 허용목록
+  (`--official-pack-hash` / `CEB_OFFICIAL_EVAL_PACK_HASHES` /
+  `--official-pack-registry`)에 핀되어야 한다. 핀 없으면 거부;
+  `--dev-allow-unpinned-pack` → `diagnostic-unpinned-pack`(미검증).
+- **공개키 검증 + 키쌍 일치(req 2)**: strict readiness는 Ed25519 비공개·공개 키가
+  로드되고 **서로 일치**함을 요구하며 공개키 지문을 보고서에 담는다. authentic은
+  여전히 대역 외 공개키를 요구한다(임베드 키는 자기일관성만).
+- **Track B 베이스라인 신뢰(req 3, `bench/ceb/track_b/baseline_trust.py`)**: 모드
+  `stockfish-lock`(HEAD가 stockfish.lock과 일치) / `hash`(허용목록) / `toy`
+  (`--dev-allow-toy-baseline` → `diagnostic-untrusted-baseline`). 신뢰 정보는
+  메타데이터에 기록.
+- **빌드 래퍼 해시 핀(req 4)**: verified Track B는 래퍼 해시가 허용목록
+  (`--build-wrapper-hash` / `CEB_TRACK_B_BUILD_WRAPPER_HASHES`)에 핀되어야 한다.
+- **빌드 출력 하드닝(req 5)**: 빌드 후 엔진 존재·실행 가능·정규 파일 확인, 출력 트리
+  심볼릭 링크 거부, 크기/파일 수 한도(512 MiB / 10000), 출력 트리 해시 기록.
+- **Track B bench/속도 검사(req 6, `bench_sanity.py`)**: 베이스라인·후보 `bench`
+  실행으로 노드 수/NPS/NPS 비율 기록; 양쪽이 bench를 지원할 때만 NPS 비율 임계값
+  강제(`--bench-min-nps-ratio`, `--dev-allow-no-bench`).
+- **스테이징 승격 강화(req 7)**: 누출 스캔 실패 시 트리 어디에도 공개 매니페스트
+  항목이 남지 않음을 테스트로 증명.
+- **API 정리(req 8)**: `GET /api/leaderboard?track=B`는 호스트형 DB가 있으면 verified
+  Track B 리더보드로 위임; 비밀 없는 `GET /api/hosted/readiness/public` 추가.
+- **릴리스 매니페스트(req 9, `release_manifest.py`)**:
+  `ceb hosted release-manifest create`가 시즌의 모든 앵커(버전·git·팩 해시·공개키
+  지문·이미지 다이제스트·Track B 베이스라인/래퍼 해시·리더보드 정책·한계)를 담은
+  비밀 없는 `ceb.release_manifest/v1`을 출력.
+- **최종 게이트(req 10)**: `--strict-public-official`이 위 앵커들을 차단성(FAIL)으로
+  취급. 보고서는 `ceb.hosted.readiness/v2`.
+
 ## v0.3.2 — 공개 공식 호스트형 벤치마크 준비
 
 테마: 정상 운영에서 우연히도 악의적으로도 공개 공식 `verified: true`를 만들 수 없게

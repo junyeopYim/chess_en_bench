@@ -67,6 +67,36 @@ def _build_tree_host(tree, build_script, engine_relpath, timeout_s=1800):
     return engine
 
 
+def _run_bench(baseline_engine, candidate_engine, engine_jail, min_nps_ratio):
+    """Bench both engines; the candidate is jailed when jailing is on."""
+    from ceb.track_b.bench_sanity import run_bench_sanity, DEFAULT_MIN_NPS_RATIO
+    base_cmd = [str(baseline_engine)]
+    cand_engine = Path(candidate_engine)
+    cand_cmd = [str(cand_engine)]
+    if engine_jail == "docker":
+        from ceb.jail import engine_command, EngineJailError
+        try:
+            cand_cmd, _ = engine_command(cand_engine.parent, "docker",
+                                         engine_name=cand_engine.name)
+        except EngineJailError:
+            cand_cmd = [str(cand_engine)]
+    try:
+        return run_bench_sanity(
+            base_cmd, cand_cmd,
+            min_nps_ratio=(min_nps_ratio if min_nps_ratio is not None
+                           else DEFAULT_MIN_NPS_RATIO))
+    finally:
+        if engine_jail == "docker":
+            from ceb.jail import cleanup_jails
+            cleanup_jails()
+
+
+def _build_jail_image_digest():
+    from ceb.hosted.metadata import image_digest
+    from ceb.track_b.build_jail import BUILD_JAIL_IMAGE
+    return image_digest(BUILD_JAIL_IMAGE)
+
+
 def run_official_track_b(*, candidate_src, baseline_src=None,
                          eval_pack_dir=None, engine_jail="none",
                          build_script=DEFAULT_BUILD_SCRIPT,
@@ -76,8 +106,9 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
                          runs_root=None, root=None, verified=False,
                          profile=None, verification_grade=None,
                          build_isolation="host", build_wrapper=None,
-                         signing_key_path=None, trust=None,
-                         progress=lambda msg: None):
+                         signing_key_path=None, trust=None, baseline_trust=None,
+                         build_wrapper_hash=None, bench_min_nps_ratio=None,
+                         allow_no_bench=False, progress=lambda msg: None):
     """Run the source-first Track B pipeline. Returns the report dict."""
     if root is None:
         root = paths.find_repo_root()
@@ -143,11 +174,30 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
                 output_dir=build_root / "candidate")
         except BuildJailError as exc:
             raise TrackBPipelineError("isolated build failed: %s" % exc)
+        build_output = {
+            "baseline_output_hash": hash_directory(build_root / "baseline"),
+            "candidate_output_hash": hash_directory(build_root / "candidate"),
+        }
     else:
         progress("building baseline (host; diagnostic) ...")
         baseline_engine = _build_tree_host(baseline_src, build_script, engine_relpath)
         progress("building candidate (host; same script; diagnostic) ...")
         candidate_engine = _build_tree_host(candidate_src, build_script, engine_relpath)
+        build_output = None
+
+    # Bench / speed sanity (req 6): record node counts / NPS; enforce the
+    # NPS-ratio threshold only when both engines actually support `bench`
+    # (toy engines do not). The candidate is jailed for bench when jailing.
+    progress("bench/speed sanity ...")
+    bench_report = _run_bench(baseline_engine, candidate_engine, engine_jail,
+                              bench_min_nps_ratio)
+    if verified and bench_report["supported"] and not bench_report["passed"]:
+        if not allow_no_bench:
+            raise TrackBPipelineError(
+                "verified Track B failed bench/speed sanity: candidate NPS "
+                "ratio %.3f is below the threshold %.3f"
+                % (bench_report.get("nps_ratio") or 0.0,
+                   bench_report["min_nps_ratio"]))
 
     progress("running candidate-vs-baseline match ...")
     match_report, feedback = run_track_b_round(
@@ -169,6 +219,19 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         "build_isolation": build_isolation,
         "build_script": build_script if build_isolation == "host" else None,
         "build_wrapper": str(build_wrapper) if build_wrapper else None,
+        "build_wrapper_hash": build_wrapper_hash,
+        "build_wrapper_trusted": bool(verified and build_wrapper_hash),
+        "build_output": build_output,
+        "build_jail_image_digest": (
+            _build_jail_image_digest() if build_isolation == "jail" else None),
+        "bench": bench_report,
+        # Baseline trust (req 3).
+        "baseline_trusted": bool(baseline_trust
+                                 and baseline_trust.get("baseline_trusted")),
+        "baseline_trust_mode": (baseline_trust.get("baseline_trust_mode")
+                                if baseline_trust else None),
+        "stockfish_lock": (baseline_trust.get("stockfish_lock")
+                           if baseline_trust else None),
     }
     metadata["eval_pack_trusted"] = bool(verified and trust)
     if trust:
