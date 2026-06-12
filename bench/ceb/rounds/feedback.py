@@ -41,6 +41,8 @@ def make_feedback(round_report):
         "round": round_report["round"],
         "mode": round_report["mode"],
         "per_opponent": per_opponent,
+        "overall": score.get("overall"),
+        "opening_coverage": score.get("opening_coverage"),
         "faults": faults,
         "penalty_points": score["penalty_points"],
         "ladder_score": score["ladder_score"],

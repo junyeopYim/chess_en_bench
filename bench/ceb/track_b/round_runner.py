@@ -82,16 +82,33 @@ def run_track_b_round(candidate_cmd, baseline_cmd, *, round_number=1,
                       run_id="track_b", games=8, movetime_ms=100,
                       max_plies=300, baseline_src=None, candidate_src=None,
                       uci_options=None, eval_pack_dir=None, root=None,
-                      runs_root=None, openings_limit=None,
-                      progress=lambda msg: None):
+                      runs_root=None, openings_limit=None, engine_jail="none",
+                      runner="internal", progress=lambda msg: None):
     """Run one Track B candidate-vs-baseline round.
 
     Returns (report dict, feedback dict). Raises TrackBRoundError when the
     diff check or a handshake fails (no games are played, nothing scored).
+    engine_jail confines the untrusted CANDIDATE engine; the baseline is
+    operator-provided and runs on the host.
     """
     if root is None:
         root = paths.find_repo_root()
     runs_root = Path(runs_root) if runs_root else paths.runs_dir(root)
+
+    candidate_cmd = list(candidate_cmd)
+    jailed = engine_jail != "none"
+    if jailed:
+        if len(candidate_cmd) != 1:
+            raise TrackBRoundError(
+                "--engine-jail requires --candidate-engine to be a single "
+                "executable path inside its workspace directory")
+        from ceb.jail import engine_command, EngineJailError
+        engine_path = Path(candidate_cmd[0]).resolve()
+        try:
+            candidate_cmd, _ = engine_command(engine_path.parent, engine_jail,
+                                              engine_name=engine_path.name)
+        except EngineJailError as exc:
+            raise TrackBRoundError(exc.public_message)
 
     diff_report = None
     if baseline_src or candidate_src:
@@ -101,36 +118,52 @@ def run_track_b_round(candidate_cmd, baseline_cmd, *, round_number=1,
         progress("checking candidate diff against the whitelist ...")
         diff_report = _run_diff_check(baseline_src, candidate_src, root)
 
-    progress("verifying UCI handshakes ...")
-    baseline_name = _verify_handshake(baseline_cmd, "baseline")
-    candidate_name = _verify_handshake(candidate_cmd, "candidate")
+    try:
+        progress("verifying UCI handshakes ...")
+        baseline_name = _verify_handshake(baseline_cmd, "baseline")
+        candidate_name = _verify_handshake(candidate_cmd, "candidate")
 
-    # Openings: a mounted private pack wins; otherwise the Track B public
-    # suite; otherwise fall back to the Track A public openings.
-    pack = resolve_eval_pack(root, private_dir=eval_pack_dir, allow_env=True)
-    suite = pack.openings
-    if pack.source == "public":
-        b_suite_path = paths.track_dir("B", root) / "public" / "quick_openings.jsonl"
-        if b_suite_path.is_file():
-            suite = load_openings_jsonl(b_suite_path)
-    if openings_limit:
-        suite = suite[:int(openings_limit)]
-    pairs = max(1, (games + 1) // 2)
-    openings = [suite[k % len(suite)] for k in range(pairs)]
+        # Openings: a mounted private pack wins; otherwise the Track B
+        # public suite; otherwise fall back to the Track A public openings.
+        pack = resolve_eval_pack(root, private_dir=eval_pack_dir, allow_env=True)
+        suite = pack.openings
+        if pack.source == "public":
+            b_suite_path = paths.track_dir("B", root) / "public" / "quick_openings.jsonl"
+            if b_suite_path.is_file():
+                suite = load_openings_jsonl(b_suite_path)
+        if openings_limit:
+            suite = suite[:int(openings_limit)]
+        pairs = max(1, (games + 1) // 2)
+        openings = [suite[k % len(suite)] for k in range(pairs)]
 
-    options = {**DEFAULT_UCI_OPTIONS, **(uci_options or {})}
-    progress("playing %d games (movetime %dms, openings %s) ..."
-             % (games, movetime_ms, ",".join(o["id"] for o in openings)))
-    round_dir = runs_root / run_id / ("track_b_round_%d" % round_number)
-    round_dir.mkdir(parents=True, exist_ok=True)
-    match = play_match(
-        list(candidate_cmd), list(baseline_cmd),
-        games=games, movetime_ms=movetime_ms, max_plies=max_plies,
-        candidate_name="candidate", opponent_name="baseline",
-        base_seed=1000 * round_number, openings=openings,
-        candidate_uci_options=options, opponent_uci_options=options,
-        games_text_path=round_dir / "games.txt",
-    )
+        options = {**DEFAULT_UCI_OPTIONS, **(uci_options or {})}
+        progress("playing %d games (movetime %dms, %d opening(s)) ..."
+                 % (games, movetime_ms, len(openings)))
+        round_dir = runs_root / run_id / ("track_b_round_%d" % round_number)
+        round_dir.mkdir(parents=True, exist_ok=True)
+        if runner == "fastchess":
+            from ceb.match.fastchess_runner import (
+                play_match_fastchess, FastchessError)
+            try:
+                match = play_match_fastchess(
+                    list(candidate_cmd), list(baseline_cmd), games=games,
+                    movetime_ms=movetime_ms, openings=openings,
+                    out_dir=round_dir)
+            except FastchessError as exc:
+                raise TrackBRoundError(str(exc))
+        else:
+            match = play_match(
+                list(candidate_cmd), list(baseline_cmd),
+                games=games, movetime_ms=movetime_ms, max_plies=max_plies,
+                candidate_name="candidate", opponent_name="baseline",
+                base_seed=1000 * round_number, openings=openings,
+                candidate_uci_options=options, opponent_uci_options=options,
+                games_text_path=round_dir / "games.txt",
+            )
+    finally:
+        if jailed:
+            from ceb.jail import cleanup_jails
+            cleanup_jails()
 
     totals = match["totals"]
     score = compute_delta_elo_report(
@@ -145,6 +178,7 @@ def run_track_b_round(candidate_cmd, baseline_cmd, *, round_number=1,
         "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "baseline_id": baseline_name,
         "candidate_id": candidate_name,
+        "runner": runner,
         "uci_options": options,
         "movetime_ms": movetime_ms,
         "max_plies": max_plies,

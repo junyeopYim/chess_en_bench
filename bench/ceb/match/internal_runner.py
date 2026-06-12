@@ -11,6 +11,7 @@ from ceb.chess import (
     START_FEN, parse_fen, board_to_fen,
     generate_legal, make_move, in_check,
 )
+from ceb.chess.movegen import is_insufficient_material, repetition_key
 from ceb.chess.pgn import game_to_text, write_games_text
 from ceb.uci.client import UCIClient, EngineTimeout, EngineCrashed, EngineError
 
@@ -30,13 +31,22 @@ def _loss_for(side_white):
 def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
               max_plies=200, grace_ms=3000, white_name="white",
               black_name="black", seed=None, cwds=(None, None),
-              white_options=None, black_options=None):
+              white_options=None, black_options=None,
+              halfmove_draw_plies=100):
     """Play one game. Returns a dict game record.
 
     cwds: (white_cwd, black_cwd) working directories for the two processes.
     white_options/black_options: extra UCI options sent via 'setoption'
     before the game (e.g. limited-strength anchor settings); engines that
     do not know an option simply ignore it.
+    halfmove_draw_plies: halfmove-clock draw threshold (100 = fifty-move
+    rule; set 150 for a 75-move policy).
+
+    Draw adjudication: checkmate/stalemate from the oracle, the halfmove
+    clock, threefold repetition, insufficient material (K vs K, K+B vs K,
+    K+N vs K), and the max-plies cap. Engines are only asked to move in
+    positions with at least one legal move; a 'bestmove 0000' there counts
+    as an illegal-move fault.
     """
     record = {
         "white": white_name,
@@ -89,6 +99,7 @@ def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
                     pass
 
         start_is_startpos = start_fen == START_FEN
+        seen_positions = {repetition_key(board): 1}
         while True:
             legal = {m.uci(): m for m in generate_legal(board)}
             if not legal:
@@ -99,8 +110,17 @@ def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
                 else:
                     record["reason"] = "stalemate"
                 break
-            if board.halfmove_clock >= 100:
-                record["reason"] = "fifty-move rule"
+            if seen_positions[repetition_key(board)] >= 3:
+                record["reason"] = "threefold repetition"
+                break
+            if is_insufficient_material(board):
+                record["reason"] = "insufficient material"
+                break
+            if board.halfmove_clock >= halfmove_draw_plies:
+                record["reason"] = ("fifty-move rule"
+                                    if halfmove_draw_plies == 100 else
+                                    "halfmove-clock draw (%d plies)"
+                                    % halfmove_draw_plies)
                 break
             if len(moves_uci) >= max_plies:
                 record["reason"] = "draw adjudicated at max plies"
@@ -126,6 +146,8 @@ def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
                 break
             board = make_move(board, move)
             moves_uci.append(best)
+            key = repetition_key(board)
+            seen_positions[key] = seen_positions.get(key, 0) + 1
     finally:
         for client in clients.values():
             client.close()

@@ -127,7 +127,7 @@ def test_official_round_with_tiny_private_pack(tmp_path):
         mode_config={"opponents": ["BenchRandom"], "games_per_opponent": 2,
                      "movetime_ms": 30, "max_plies": 30, "openings_limit": 1})
 
-    assert report["mode"] == "official"
+    assert report["mode"] == "official_round"
     assert report["strict_gate"] is True
     assert report["eval_pack"]["source"] == "public+private"
     assert report["openings_used"] == ["hidden_scandinavian"]

@@ -142,7 +142,11 @@ the caveats below (`elapsed_s` always differs).
   rebuilds on different days can differ, and host execution (the default)
   uses whatever the machine has.
 
-## Planned (not implemented)
+## Runners
 
-A fastchess/cutechess adapter for external match orchestration. All match
-play today goes through the internal runner described above.
+The internal Python runner is the default and the trusted reference for all
+matches and tests. An optional `fastchess` adapter
+(`ceb track-b round run --runner fastchess`) is available for high-volume
+Track B matches; it folds faults into results rather than attributing them
+and has no oracle PGN post-validation yet, so the internal runner remains
+authoritative. A `cutechess-cli` adapter is not implemented.

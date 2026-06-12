@@ -25,7 +25,7 @@ cat runs/<run_id>/round_1/feedback.json
 |---|---|---|
 | `schema` | string | Constant `"ceb.round.feedback/v1"`. |
 | `round` | integer | Round number, as passed to `ceb round run --round N`. |
-| `mode` | string | `"quick"` (free smoke round) or `"official"` (consumes budget; runs the strict gate). |
+| `mode` | string | `"quick"` (free smoke round), `"official_round"` (consumes round budget; strict gate), or `"final_eval"` (leaderboard-quality; strict gate; no budget cost). Legacy reports may show `"official"`. |
 | `per_opponent` | array of objects | One entry per opponent, in the order matches were played. See below. |
 | `faults` | object | Candidate fault totals across all matches in the round: `{"illegal": int, "timeout": int, "crash": int}`. |
 | `penalty_points` | number | `illegal*30 + timeout*15 + crash*25` (weights from `tracks/a_from_scratch/scoring.yaml`). |

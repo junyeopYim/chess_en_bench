@@ -116,15 +116,18 @@ Example report (official round, 4 games per opponent, one timeout):
 ### Leaderboard (`ceb.leaderboard/v1`)
 
 `compute_leaderboard(results_dir, track, include_quick=False)` scans
-`runs/*/state.json` and ranks runs by their best scored round. The official
-policy counts **official rounds only**; rounds recorded without a `mode`
-field count as official (legacy states). `include_quick=True`
-(CLI `ceb leaderboard compute --include-quick`, API
-`/api/leaderboard?include_quick=true`) is a diagnostic view that also ranks
-quick rounds — the CLI labels it as non-official and it must never be
-presented as an official ranking. The board JSON echoes the flag in an
-`include_quick` field, and each entry carries `official_rounds_played`
-alongside `rounds_played`. See `docs/leaderboard_policy.md`.
+`runs/*/state.json` and ranks runs. The official policy selects, per run, the
+best `final_eval` result if any exists, otherwise the best `official_round`;
+rounds recorded as `official` (legacy) count as official rounds, and quick
+rounds never count. `include_quick=True` (CLI
+`ceb leaderboard compute --include-quick`, API
+`/api/leaderboard?include_quick=true`) is a diagnostic view that ranks the
+best score across all modes — the CLI labels it as non-official and it must
+never be presented as an official ranking. The board JSON echoes the flag in
+an `include_quick` field, and each entry carries `official_rounds_played`
+alongside `rounds_played` and `verified` (always `false` for this
+self-reported scanner — verified results come only from the hosted worker).
+See `docs/leaderboard_policy.md` and `docs/LEADERBOARD_GOVERNANCE.md`.
 
 ## Track B: delta Elo vs baseline (`ceb.score.track_b/v1`)
 
@@ -149,8 +152,9 @@ With 0 games, `score_rate`, `delta_elo`, `delta_elo_ci95`, and
 automatically and embeds it in the round report
 (`ceb.track_b.round.report/v1`, operator-facing, full detail) next to a
 sanitized `feedback.json` (`ceb.track_b.feedback/v1`, aggregates only).
-**Planned, not implemented:** a fastchess/cutechess match-runner adapter —
-games currently run through the internal match runner.
+Matches run through the internal runner by default; an optional `fastchess`
+adapter (`--runner fastchess`) exists for high-volume Track B matches, with
+the internal runner remaining the trusted reference.
 
 ## Reproducing the numbers
 

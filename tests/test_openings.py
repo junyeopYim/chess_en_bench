@@ -87,7 +87,7 @@ def test_quick_mode_config_selects_multiple_openings():
 
     pack = load_public_pack(REPO_ROOT)
     quick = _openings_for_mode(pack, DEFAULT_ROUND_MODES["quick"])
-    official = _openings_for_mode(pack, DEFAULT_ROUND_MODES["official"])
+    official = _openings_for_mode(pack, DEFAULT_ROUND_MODES["official_round"])
     assert len(quick) == 2
     assert len(official) == 6
     # The round runner no longer plays everything from START_FEN only.

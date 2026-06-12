@@ -1,5 +1,13 @@
 # Decisions
 
+- 2026-06-12 — v0.3: the engine jail isolates only the untrusted engine (workspace-only mount), not the whole harness; the evaluator stays trusted on the host and reads hidden packs — so hidden data is never on the engine's filesystem even when jailed.
+- 2026-06-12 — v0.3: hidden packs combine with the jail by feeding positions as `position fen ...` UCI lines; the pack directory is never mounted. This is why `--eval-pack` works with `--engine-jail docker` but not the legacy `--sandbox docker`.
+- 2026-06-12 — v0.3: artifacts are public-by-exception via a per-directory manifest (deny by default); only sanitized feedback/public report are public. A leak-scanner test enforces it.
+- 2026-06-12 — v0.3: only the hosted worker mints `verified: true`; it refuses without a private pack, on scan failure, or on strict-gate failure. Local/self-reported leaderboards always carry `verified: false`.
+- 2026-06-12 — v0.3: result signing is symmetric HMAC-SHA256 (keyed by CEB_SIGNING_KEY) for the MVP; no key → explicit `unsigned`, never a false authenticity claim. Public-key attestation is deferred.
+- 2026-06-12 — v0.3: round mode renamed official→official_round and final_eval added; leaderboard prefers final_eval, then official rounds, never quick. Legacy "official" records still count.
+- 2026-06-12 — v0.3: errors that can describe hidden data use SanitizedError (public/private messages); the CLI catch-all withholds unknown exception text (CEB_DEBUG=1 to re-raise).
+
 - 2026-06-12 — v0.2: official leaderboard counts official rounds only; quick rounds are diagnostic (`--include-quick`) — free unlimited quick rounds must not corrupt rankings.
 - 2026-06-12 — v0.2: official rounds run the strict gate (perft mandatory); the standalone public gate stays lenient — development friendliness vs. official rule-correctness.
 - 2026-06-12 — v0.2: openings are JSONL (validated UCI move lists applied by the oracle), rotated across opponents in pairs with color swap — .pgn files kept for humans only.

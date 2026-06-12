@@ -28,6 +28,7 @@ from pathlib import Path
 from ceb import paths
 from ceb.chess import parse_fen
 from ceb.match.openings import load_openings_jsonl
+from ceb.sanitize import SanitizedError
 
 ENV_PRIVATE_DIR = "CEB_PRIVATE_EVAL_DIR"
 
@@ -38,8 +39,12 @@ PRIVATE_FILES = {
 }
 
 
-class EvalPackError(ValueError):
-    """Eval pack directory or contents are invalid."""
+class EvalPackError(SanitizedError, ValueError):
+    """Eval pack directory or contents are invalid.
+
+    public_message never includes hidden FENs, moves, or paths beyond a
+    basename; private_message carries operator detail.
+    """
 
 
 class EvalPack:
@@ -60,7 +65,9 @@ class EvalPack:
         }
 
 
-def _load_jsonl(path, id_prefix):
+def _load_jsonl(path, id_prefix, hidden=False):
+    path = Path(path)
+    name = path.name if hidden else str(path)
     rows = []
     with open(path, encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, 1):
@@ -70,11 +77,15 @@ def _load_jsonl(path, id_prefix):
             try:
                 row = json.loads(line)
             except json.JSONDecodeError as exc:
-                raise EvalPackError("%s line %d: bad JSON: %s" % (path, line_no, exc))
+                raise EvalPackError(
+                    "%s line %d: bad JSON (content withheld)" % (name, line_no),
+                    "%s line %d: bad JSON: %s" % (path, line_no, exc))
             if not isinstance(row, dict):
                 raise EvalPackError("%s line %d: row must be a JSON object"
-                                    % (path, line_no))
+                                    % (name, line_no))
             row.setdefault("id", "%s_%d" % (id_prefix, line_no))
+            if hidden:
+                row["hidden"] = True
             # Validate FENs at load time. The error quotes the row id only —
             # never the FEN — so a typo in a hidden pack cannot leak the
             # position into any report or console output.
@@ -84,7 +95,9 @@ def _load_jsonl(path, id_prefix):
                 except (ValueError, TypeError):
                     raise EvalPackError(
                         "%s: row %r has an invalid FEN (content withheld)"
-                        % (Path(path).name, row["id"]))
+                        % (path.name, row["id"]),
+                        "%s: row %r has an invalid FEN: %r"
+                        % (path, row["id"], row.get("fen")))
             rows.append(row)
     return rows
 
@@ -106,21 +119,24 @@ def load_private_pack_dir(private_dir):
     private_dir = Path(private_dir)
     if not private_dir.is_dir():
         raise EvalPackError(
-            "eval pack directory not found: %s (pass --eval-pack <dir> or set "
+            "eval pack directory %r not found (pass --eval-pack <dir> or set "
             "%s to a directory containing %s)"
-            % (private_dir, ENV_PRIVATE_DIR, ", ".join(PRIVATE_FILES.values())))
+            % (private_dir.name, ENV_PRIVATE_DIR, ", ".join(PRIVATE_FILES.values())),
+            "eval pack directory not found: %s" % private_dir)
     pieces = {}
     fen_path = private_dir / PRIVATE_FILES["fens"]
     if fen_path.is_file():
-        pieces["fens"] = _load_jsonl(fen_path, "hidden_fen")
+        pieces["fens"] = _load_jsonl(fen_path, "hidden_fen", hidden=True)
     perft_path = private_dir / PRIVATE_FILES["perft"]
     if perft_path.is_file():
-        pieces["perft"] = _load_jsonl(perft_path, "hidden_perft")
+        pieces["perft"] = _load_jsonl(perft_path, "hidden_perft", hidden=True)
     openings_path = private_dir / PRIVATE_FILES["openings"]
     if openings_path.is_file():
-        pieces["openings"] = load_openings_jsonl(openings_path)
+        pieces["openings"] = load_openings_jsonl(openings_path, hidden=True)
     if not pieces:
         raise EvalPackError(
+            "eval pack %r contains none of: %s"
+            % (private_dir.name, ", ".join(PRIVATE_FILES.values())),
             "eval pack %s contains none of: %s"
             % (private_dir, ", ".join(PRIVATE_FILES.values())))
     manifest = {}
@@ -129,10 +145,12 @@ def load_private_pack_dir(private_dir):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
-            raise EvalPackError("%s: bad manifest.json: %s" % (private_dir, exc))
+            raise EvalPackError(
+                "%s: bad manifest.json (content withheld)" % private_dir.name,
+                "%s: bad manifest.json: %s" % (private_dir, exc))
         if not isinstance(manifest, dict):
             raise EvalPackError("%s: manifest.json must be a JSON object"
-                                % private_dir)
+                                % private_dir.name)
     return pieces, manifest
 
 

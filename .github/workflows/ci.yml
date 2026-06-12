@@ -35,6 +35,9 @@ jobs:
       - name: Strict gate (example engine)
         run: ceb gate run --track A --workspace examples/submissions/minimal_uci_engine_python --strict --no-match
 
+      - name: Anti-cheating scan (example engine)
+        run: ceb scan workspace --track A --workspace examples/submissions/minimal_uci_engine_python
+
       - name: Quick round smoke (prepared workspace, run-id inference)
         run: |
           rm -rf runs/ci_smoke
@@ -43,10 +46,31 @@ jobs:
           ceb round run --track A --workspace runs/ci_smoke/workspace --round 1 --quick
           test -f runs/ci_smoke/round_1/report.json
 
-      - name: Leaderboard
+      - name: Leaderboard (official + diagnostic)
         run: |
           ceb leaderboard compute --track A --results runs
           ceb leaderboard compute --track A --results runs --include-quick
 
+      - name: Hosted SQLite smoke (verified result + leaderboard)
+        run: |
+          rm -rf runs/hosted_ci.sqlite runs/hosted_ci_store
+          ceb hosted init --db runs/hosted_ci.sqlite
+          ceb hosted submit --track A --workspace examples/submissions/minimal_uci_engine_python --run-id ci_hosted --db runs/hosted_ci.sqlite
+          ceb hosted worker run-once --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --quick-test-mode
+          ceb hosted result show --run-id ci_hosted --db runs/hosted_ci.sqlite
+          ceb hosted leaderboard --db runs/hosted_ci.sqlite --track A
+
+      - name: Track B toy round
+        run: |
+          ceb track-b round run \
+            --candidate-engine examples/submissions/minimal_uci_engine_python/engine \
+            --baseline-engine BenchRandom --games 2 --movetime 30 --max-plies 20 \
+            --runs-dir runs/ci_track_b
+
       - name: API import
         run: python -c "from ceb.api.main import app; print(app.title)"
+
+      # Docker engine-jail / sandbox integration tests are skipped here
+      # (no daemon / image in default CI); run locally with:
+      #   bash scripts/build_jail_image.sh
+      #   CEB_DOCKER_TESTS=1 pytest tests/test_engine_jail.py tests/test_sandbox_docker.py

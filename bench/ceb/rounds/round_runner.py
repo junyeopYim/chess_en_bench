@@ -1,10 +1,18 @@
 """Round execution: gate precondition, budget accounting, matches, scoring.
 
-v0.2 policy: official rounds run the STRICT gate (perft required), draw
-their start positions from the opening suite of the resolved eval pack
-(public + optional operator-mounted hidden pack), and rotate openings
-across opponents so a round covers the whole suite. Quick rounds stay
-non-strict, free, and use a small public opening subset.
+Eval modes (P0.6):
+  quick           tiny, free, diagnostic; non-strict gate
+  official_round  consumes one unit of the official round budget; strict gate
+  final_eval      leaderboard-quality evaluation; strict gate; does not
+                  consume round budget (hosted policy decides when it runs)
+
+Official-grade modes draw start positions from the resolved eval pack
+(public + optional operator-mounted hidden pack) and rotate openings across
+opponents. The untrusted engine can be confined with engine_jail="docker";
+the eval pack is read by the evaluator only and is never mounted into the
+jail. Artifacts are written with an explicit visibility model: feedback and
+the public report are sanitized; full reports, match logs, and game text are
+private operator artifacts.
 """
 
 import json
@@ -24,22 +32,43 @@ from ceb.rounds.state import RunState
 from ceb.scoring.track_a import (
     compute_round_score, DEFAULT_OPPONENT_RATINGS, DEFAULT_PENALTIES,
 )
+from ceb.storage import (
+    VISIBILITY_PRIVATE, VISIBILITY_PUBLIC, register_artifact, write_artifact,
+)
+
+MODE_QUICK = "quick"
+MODE_OFFICIAL = "official_round"
+MODE_FINAL = "final_eval"
+EVAL_MODES = (MODE_QUICK, MODE_OFFICIAL, MODE_FINAL)
+
+# Modes that consume one unit of the official round budget.
+_BUDGET_MODES = {MODE_OFFICIAL}
+# Legacy v0.2 records used "official" for official rounds.
+LEGACY_OFFICIAL = "official"
 
 DEFAULT_ROUND_MODES = {
-    "quick": {
+    MODE_QUICK: {
         "opponents": ["BenchRandom", "BenchMaterial1"],
         "games_per_opponent": 2,
         "movetime_ms": 50,
         "max_plies": 120,
         "openings_limit": 2,
     },
-    "official": {
+    MODE_OFFICIAL: {
         "opponents": ["BenchRandom", "BenchGreedyCapture", "BenchMaterial1",
                       "BenchPST1", "BenchMiniMax2", "BenchAlphaBeta3"],
         "games_per_opponent": 4,
         "movetime_ms": 200,
         "max_plies": 200,
         "openings_limit": 6,
+    },
+    MODE_FINAL: {
+        "opponents": ["BenchRandom", "BenchGreedyCapture", "BenchMaterial1",
+                      "BenchPST1", "BenchMiniMax2", "BenchAlphaBeta3"],
+        "games_per_opponent": 8,
+        "movetime_ms": 200,
+        "max_plies": 200,
+        "openings_limit": 8,
     },
 }
 
@@ -58,7 +87,10 @@ def _scoring_config(root):
 def _round_mode_config(scoring_cfg, mode):
     modes = scoring_cfg.get("round_modes") or {}
     cfg = dict(DEFAULT_ROUND_MODES[mode])
-    cfg.update({k: v for k, v in (modes.get(mode) or {}).items() if v is not None})
+    loaded = modes.get(mode)
+    if loaded is None and mode == MODE_OFFICIAL:
+        loaded = modes.get(LEGACY_OFFICIAL)  # legacy config key
+    cfg.update({k: v for k, v in (loaded or {}).items() if v is not None})
     return cfg
 
 
@@ -88,20 +120,28 @@ def _resolve_opponents(mode_cfg, scoring_cfg, progress):
     """Opponent specs for a round: the benchmark pool plus optional
     limited-strength anchor engines (e.g. Stockfish UCI_Elo levels).
 
-    Anchors degrade gracefully: a missing engine binary skips the anchor
-    with a progress note instead of failing the round.
+    Anchors degrade gracefully by default: a missing engine binary skips the
+    anchor with a progress note. With mode_cfg["anchors_required"] truthy
+    (hosted official config), a missing anchor aborts the round instead.
     """
     specs = [{"name": name, "cmd": opponent_command(name), "options": None}
              for name in mode_cfg["opponents"]]
     anchor_cfg = scoring_cfg.get("anchor_opponents") or {}
+    required = bool(mode_cfg.get("anchors_required"))
     for name in mode_cfg.get("anchors") or []:
         spec = anchor_cfg.get(name)
         if not isinstance(spec, dict):
+            if required:
+                raise RoundError("required anchor %s is not defined in "
+                                 "scoring.yaml anchor_opponents" % name)
             progress("skipping anchor %s: not defined in scoring.yaml "
                      "anchor_opponents" % name)
             continue
         engine = shutil.which(str(spec.get("engine", "stockfish")))
         if not engine:
+            if required:
+                raise RoundError("required anchor %s: engine %r not on PATH"
+                                 % (name, spec.get("engine", "stockfish")))
             progress("skipping anchor %s: engine %r not on PATH"
                      % (name, spec.get("engine", "stockfish")))
             continue
@@ -126,15 +166,51 @@ def _openings_for_mode(pack, mode_cfg):
     return suite
 
 
-def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
-              root=None, runs_root=None, eval_pack_dir=None, mode_config=None,
+def make_public_report(round_report, pack):
+    """Sanitized, agent/public-safe view of a round report.
+
+    Excludes host paths, hidden opening ids, per-game data, and anything
+    derived from private pack contents beyond counts.
+    """
+    pack_is_private = pack.source != "public"
+    openings_used = round_report.get("openings_used", [])
+    public = {
+        "schema": "ceb.round.report.public/v1",
+        "run_id": round_report["run_id"],
+        "track": round_report["track"],
+        "round": round_report["round"],
+        "mode": round_report["mode"],
+        "strict_gate": round_report["strict_gate"],
+        "finished_at": round_report["finished_at"],
+        "eval_pack": {
+            "name": pack.name,
+            "source": pack.source,
+        },
+        "opening_coverage": {
+            "openings_played": len(openings_used),
+            # Opening ids are public only for fully-public packs.
+            "opening_ids": openings_used if not pack_is_private else None,
+        },
+        "matches": round_report["matches"],
+        "score": round_report["score"],
+        "verified": False,  # local results are self-reported / diagnostic
+    }
+    return public
+
+
+def run_round(workspace, round_number, *, quick=False, mode=None, run_id=None,
+              track="A", root=None, runs_root=None, eval_pack_dir=None,
+              mode_config=None, engine_jail="none",
               progress=lambda msg: None):
     """Run one round. Returns (round_report dict, feedback dict, state).
 
-    Official rounds use the strict gate and may consume an operator-mounted
-    hidden eval pack (--eval-pack / CEB_PRIVATE_EVAL_DIR); quick rounds are
-    non-strict and use public data unless eval_pack_dir is passed explicitly.
-    mode_config overrides the configured round mode (operator/testing knob).
+    mode: one of quick / official_round / final_eval (quick=True is a
+    shorthand for mode="quick"; the default is official_round).
+    Official-grade modes use the strict gate and may consume an
+    operator-mounted hidden eval pack (--eval-pack / CEB_PRIVATE_EVAL_DIR);
+    quick rounds are non-strict and use public data unless eval_pack_dir is
+    passed explicitly. mode_config overrides the configured round mode
+    (operator/testing knob). engine_jail confines the untrusted engine.
 
     Raises RoundError when preconditions fail (gate, budget).
     """
@@ -144,8 +220,12 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
     workspace = Path(workspace).resolve()
     if run_id is None:
         run_id = default_run_id(workspace)
-    mode = "quick" if quick else "official"
-    strict = mode == "official"
+    if mode is None:
+        mode = MODE_QUICK if quick else MODE_OFFICIAL
+    if mode not in EVAL_MODES:
+        raise RoundError("unknown eval mode %r (use one of: %s)"
+                         % (mode, ", ".join(EVAL_MODES)))
+    strict = mode != MODE_QUICK
 
     pack = resolve_eval_pack(root, private_dir=eval_pack_dir, allow_env=strict)
 
@@ -154,12 +234,12 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
                                     budget_total=_budget_total(root))
 
     # Gate precondition: re-run now so the round always starts from a
-    # verified engine (gate attempts are unlimited). Official rounds use
-    # the strict gate: 'go perft' support is mandatory.
+    # verified engine (gate attempts are unlimited). Official-grade modes
+    # use the strict gate: 'go perft' support is mandatory.
     progress("running %s gate on %s ..." % ("strict" if strict else "public",
                                             workspace))
     gate_report = run_gate(workspace, track="A", root=root, strict=strict,
-                           eval_pack=pack)
+                           eval_pack=pack, engine_jail=engine_jail)
     gate_path = save_gate_report(
         gate_report, runs_root / run_id / "gate_report.json")
     state.record_gate(gate_report.passed, gate_path)
@@ -169,7 +249,7 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
                          "spent.\n\n%s" % ("strict" if strict else "public",
                                            gate_report.human_summary()))
 
-    ok, why = state.can_start_round(official=(mode == "official"))
+    ok, why = state.can_start_round(official=(mode in _BUDGET_MODES))
     if not ok:
         raise RoundError(why)
 
@@ -189,36 +269,47 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
     round_dir = runs_root / run_id / ("round_%d" % round_number)
     round_dir.mkdir(parents=True, exist_ok=True)
 
-    engine_cmd = [str(workspace / "engine")]
+    from ceb.jail import engine_command, cleanup_jails
+    engine_cmd, engine_cwd = engine_command(workspace, engine_jail)
     games = int(mode_cfg["games_per_opponent"])
     pairs = max(1, (games + 1) // 2)
     match_reports = []
-    for j, opponent in enumerate(opponents):
-        # Rotate the suite so the round as a whole covers more openings
-        # than any single match plays.
-        openings = rotate_suite(suite, pairs, (j * pairs) % len(suite))
-        progress("match vs %s (%d games, movetime %dms, openings %s) ..."
-                 % (opponent["name"], games, mode_cfg["movetime_ms"],
-                    ",".join(o["id"] for o in openings)))
-        report = play_match(
-            engine_cmd, opponent["cmd"],
-            games=games,
-            movetime_ms=int(mode_cfg["movetime_ms"]),
-            max_plies=int(mode_cfg["max_plies"]),
-            candidate_name=run_id,
-            opponent_name=opponent["name"],
-            candidate_cwd=str(workspace),
-            base_seed=1000 * round_number,
-            games_text_path=round_dir / ("games_vs_%s.txt" % opponent["name"]),
-            openings=openings,
-            opponent_uci_options=opponent["options"],
-        )
-        match_reports.append(report)
-        (round_dir / ("match_vs_%s.json" % opponent["name"])).write_text(
-            json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    try:
+        for j, opponent in enumerate(opponents):
+            # Rotate the suite so the round as a whole covers more openings
+            # than any single match plays.
+            openings = rotate_suite(suite, pairs, (j * pairs) % len(suite))
+            progress("match vs %s (%d games, movetime %dms, %d opening(s)) ..."
+                     % (opponent["name"], games, mode_cfg["movetime_ms"],
+                        len(openings)))
+            report = play_match(
+                engine_cmd, opponent["cmd"],
+                games=games,
+                movetime_ms=int(mode_cfg["movetime_ms"]),
+                max_plies=int(mode_cfg["max_plies"]),
+                candidate_name=run_id,
+                opponent_name=opponent["name"],
+                candidate_cwd=engine_cwd,
+                base_seed=1000 * round_number,
+                games_text_path=round_dir / ("games_vs_%s.txt" % opponent["name"]),
+                openings=openings,
+                opponent_uci_options=opponent["options"],
+            )
+            match_reports.append(report)
+            write_artifact(round_dir, "match_vs_%s.json" % opponent["name"],
+                           report, VISIBILITY_PRIVATE)
+            register_artifact(round_dir, "games_vs_%s.txt" % opponent["name"],
+                              VISIBILITY_PRIVATE)
+    finally:
+        if engine_jail != "none":
+            cleanup_jails()
 
     score = compute_round_score(match_reports, opponent_ratings, penalties)
     openings_used = sorted({o for r in match_reports for o in r.get("openings", [])})
+    score["opening_coverage"] = {
+        "openings_played": len(openings_used),
+        "suite_size": len(suite),
+    }
     round_report = {
         "schema": "ceb.round.report/v1",
         "run_id": run_id,
@@ -226,6 +317,7 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
         "round": round_number,
         "mode": mode,
         "strict_gate": strict,
+        "engine_jail": engine_jail,
         "eval_pack": pack.describe(),
         "openings_used": openings_used,
         "workspace": str(workspace),
@@ -237,14 +329,17 @@ def run_round(workspace, round_number, *, quick=False, run_id=None, track="A",
         ],
         "score": score,
     }
-    report_path = round_dir / "report.json"
-    report_path.write_text(json.dumps(round_report, indent=2) + "\n",
-                           encoding="utf-8")
+    # Full report (host paths, hidden opening ids) is a private artifact;
+    # report.public.json and feedback.json are the sanitized views.
+    write_artifact(round_dir, "report.json", round_report, VISIBILITY_PRIVATE)
+    write_artifact(round_dir, "report.public.json",
+                   make_public_report(round_report, pack), VISIBILITY_PUBLIC)
+    register_artifact(runs_root / run_id, "gate_report.json", VISIBILITY_PRIVATE)
 
-    state.record_round(round_number, mode, report_path, score["final_score"])
+    state.record_round(round_number, mode, round_dir / "report.json",
+                       score["final_score"])
     state.save(runs_root)
 
     feedback = make_feedback(round_report)
-    (round_dir / "feedback.json").write_text(
-        json.dumps(feedback, indent=2) + "\n", encoding="utf-8")
+    write_artifact(round_dir, "feedback.json", feedback, VISIBILITY_PUBLIC)
     return round_report, feedback, state

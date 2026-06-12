@@ -87,7 +87,8 @@ class RunState:
         return True, ""
 
     def record_round(self, round_number, mode, report_path, score):
-        if mode == "official":
+        # "official" is the legacy v0.2 name for official_round records.
+        if mode in ("official", "official_round"):
             self.budget_used += 1
         self.rounds.append({
             "round": round_number,

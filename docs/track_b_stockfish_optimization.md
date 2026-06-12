@@ -74,9 +74,19 @@ ceb track-b round run \
 
 Flags: `--round N` (default 1), `--run-id ID` (default `track_b_local`),
 `--games N` (default 8), `--movetime MS` (default 100), `--max-plies N`
-(default 300), `--openings-limit N`, `--eval-pack DIR`, `--runs-dir DIR`.
-An engine spec is either an executable path or a benchmark opponent name
-(`BenchRandom` … `BenchAlphaBeta3`) — the names exist for testing only.
+(default 300), `--openings-limit N`, `--eval-pack DIR`, `--runs-dir DIR`,
+`--engine-jail none|docker` (default `none`), and
+`--runner internal|fastchess` (default `internal`). An engine spec is either
+an executable path or a benchmark opponent name (`BenchRandom` …
+`BenchAlphaBeta3`) — the names exist for testing only.
+
+`--engine-jail docker` confines only the untrusted **candidate** engine in the
+Docker jail (`chess-en-bench-jail:0.3`); the baseline runs trusted on the host.
+The candidate must then be a single executable inside its workspace directory.
+`--runner fastchess` swaps in the optional fastchess backend
+(`bench/ceb/match/fastchess_runner.py`) for high-volume matches; the
+`internal` runner is the default and the trusted reference, and fastchess
+commands fail with an actionable message when the binary is absent.
 
 The runner (`bench/ceb/track_b/round_runner.py`) executes strictly in order:
 
@@ -109,6 +119,18 @@ pinned Stockfish 18 (`sf_18` / `cb3d4ee`) with identical compiler flags,
 UCI options; the build provenance is documented policy, **not** enforced by
 code — the runner plays whatever executables it is given.
 
+## Source-first official pipeline: `ceb track-b official run`
+
+`ceb track-b round run` above plays two engines you already built. The
+source-first pipeline (`ceb track-b official run`) takes a candidate *source
+tree* instead and runs scan → build baseline + candidate with the same build
+script → paired matches → a signed `ceb.track_b.official_result/v1` with both
+trees' content hashes. CLI runs are `verified:false` (diagnostic); the real
+pinned-Stockfish build wrappers, identical compiler flags, and `bench`/speed
+sanity are operator-supplied and not enforced by code. See
+**`docs/TRACK_B_OFFICIAL_PIPELINE.md`** for the full flag set, ordering, the
+engine-jail option for the candidate, and the implemented/operator-step split.
+
 ## Delta-Elo scoring model
 
 W/D/L feeds `ceb.scoring.track_b` (schema `ceb.score.track_b/v1`), built on
@@ -133,14 +155,21 @@ Implemented:
 - `ceb track-b status`, `ceb track-b check-diff`
 - `ceb track-b round run` — automated candidate-vs-baseline rounds with the
   abort-before-games diff check, handshake verification, paired openings,
-  fixed UCI options, delta-Elo scoring, and sanitized feedback
+  fixed UCI options, delta-Elo scoring, and sanitized feedback; now also
+  `--engine-jail none|docker` (jails the candidate) and
+  `--runner internal|fastchess`
+- `ceb track-b official run` — the source-first pipeline (scan → build both
+  trees with the same build script → matches → signed
+  `ceb.track_b.official_result/v1`); see `docs/TRACK_B_OFFICIAL_PIPELINE.md`
+- the optional fastchess adapter (`--runner fastchess`); the internal runner
+  remains the default and trusted reference
 - hidden opening packs via the shared eval-pack loader (`--eval-pack` /
   `CEB_PRIVATE_EVAL_DIR`); no hidden data is shipped in this repository
 
 Planned / operator responsibility:
 
-- building the pinned baseline and a flag-identical candidate build is a
-  manual operator step, not automated by the runner
-- fastchess/cutechess adapters
+- real pinned-Stockfish build wrappers, identical compiler flags, and a
+  `bench`/speed sanity check are operator-supplied; the pipeline builds and
+  plays whatever the build script produces and does not enforce them
 - an aggregated Track B leaderboard (the leaderboard command serves Track A;
-  Track B round reports are per-run artifacts only)
+  Track B reports are per-run artifacts only)

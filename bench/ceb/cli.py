@@ -140,7 +140,7 @@ def cmd_gate_run(args):
         return 2
     report = run_gate(args.workspace, track=args.track, root=root,
                       quick_match=not args.no_match, strict=args.strict,
-                      eval_pack=pack)
+                      eval_pack=pack, engine_jail=args.engine_jail)
     out_path = save_gate_report(report, args.json_out, root=root)
     _print(report.human_summary())
     _print("")
@@ -159,9 +159,10 @@ def cmd_round_run(args):
         from ceb import paths
         from ceb.sandbox import run_round_in_docker, SandboxError
         if args.eval_pack:
-            _print("--eval-pack is not supported with --sandbox docker in "
-                   "v0.2; set CEB_PRIVATE_EVAL_DIR inside a custom image or "
-                   "run with --sandbox none")
+            _print("--eval-pack is not supported with the legacy "
+                   "--sandbox docker mode; use --engine-jail docker "
+                   "(the evaluator reads the pack host-side and never mounts "
+                   "it into the engine), or run with --sandbox none")
             return 2
         try:
             return run_round_in_docker(
@@ -171,11 +172,14 @@ def cmd_round_run(args):
         except SandboxError as exc:
             _print("sandbox error: %s" % exc)
             return 2
+    mode = None
+    if args.final_eval:
+        mode = "final_eval"
     try:
         report, feedback, state = run_round(
-            args.workspace, args.round, quick=args.quick, run_id=args.run_id,
-            track=args.track, runs_root=args.runs_dir,
-            eval_pack_dir=args.eval_pack,
+            args.workspace, args.round, quick=args.quick, mode=mode,
+            run_id=args.run_id, track=args.track, runs_root=args.runs_dir,
+            eval_pack_dir=args.eval_pack, engine_jail=args.engine_jail,
             progress=lambda msg: _print("  " + msg))
     except (RoundError, EvalPackError) as exc:
         _print("round aborted: %s" % exc)
@@ -284,7 +288,8 @@ def cmd_track_b_round_run(args):
             movetime_ms=args.movetime, max_plies=args.max_plies,
             baseline_src=args.baseline_src, candidate_src=args.candidate_src,
             eval_pack_dir=args.eval_pack, runs_root=args.runs_dir,
-            openings_limit=args.openings_limit,
+            openings_limit=args.openings_limit, engine_jail=args.engine_jail,
+            runner=args.runner,
             progress=lambda msg: _print("  " + msg))
     except (TrackBRoundError, FileNotFoundError) as exc:
         _print("track B round aborted: %s" % exc)
@@ -302,6 +307,33 @@ def cmd_track_b_round_run(args):
     return 0
 
 
+def cmd_track_b_official_run(args):
+    from ceb.track_b.official_pipeline import (
+        run_official_track_b, TrackBPipelineError)
+    from ceb.track_b.round_runner import TrackBRoundError
+
+    try:
+        report = run_official_track_b(
+            candidate_src=args.candidate_src, baseline_src=args.baseline_src,
+            eval_pack_dir=args.eval_pack, engine_jail=args.engine_jail,
+            build_script=args.build_script, engine_relpath=args.engine_relpath,
+            games=args.games, movetime_ms=args.movetime,
+            max_plies=args.max_plies, run_id=args.run_id,
+            runs_root=args.runs_dir, verified=False,
+            progress=lambda msg: _print("  " + msg))
+    except (TrackBPipelineError, TrackBRoundError) as exc:
+        _print("track B official pipeline aborted: %s" % exc)
+        return 2
+    score = report["score"]
+    _print("")
+    _print("Track B official pipeline — run %s" % report["run_id"])
+    _print("  delta Elo: %s  (95%% CI %s)" % (score["delta_elo"],
+                                              score["delta_elo_ci95"]))
+    _print("  verified : %s (CLI runs are diagnostic; hosted worker "
+           "verification is the official path)" % report["verified"])
+    return 0
+
+
 def cmd_track_b_check_diff(args):
     from ceb import paths
     from ceb.track_b.diff_policy import check_diff, load_patterns
@@ -312,6 +344,168 @@ def cmd_track_b_check_diff(args):
     report = check_diff(args.baseline, args.candidate, allowed, forbidden)
     _print(json.dumps(report, indent=2))
     return 0 if report["passed"] else 2
+
+
+# ----- scan ---------------------------------------------------------------------
+
+def cmd_scan_workspace(args):
+    from ceb.scan import scan_workspace
+
+    if str(args.track).upper() not in ("A", "A_FROM_SCRATCH"):
+        _print("scan workspace currently supports track A only")
+        return 2
+    report = scan_workspace(args.workspace)
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(report, indent=2) + "\n",
+                                       encoding="utf-8")
+    _print("Static scan — %s" % report["workspace"])
+    for finding in report["findings"]:
+        _print("  [%s] %-24s %s — %s" % (finding["severity"].upper(),
+                                         finding["rule"], finding["path"],
+                                         finding["detail"]))
+    if not report["findings"]:
+        _print("  no findings")
+    _print("Scan result: %s (%d fail, %d warn)"
+           % ("PASSED" if report["passed"] else "FAILED",
+              report["fail_count"], report["warn_count"]))
+    return 0 if report["passed"] else 2
+
+
+def cmd_scan_track_b(args):
+    from ceb.scan import scan_track_b
+
+    report = scan_track_b(args.baseline_src, args.candidate_src)
+    _print(json.dumps(report, indent=2))
+    return 0 if report["passed"] else 2
+
+
+# ----- hosted -------------------------------------------------------------------
+
+def cmd_hosted_init(args):
+    from ceb.hosted import db as hosted_db
+
+    path = hosted_db.init_db(args.db)
+    _print("hosted database initialized: %s" % path)
+    _print("artifact store: %s" % hosted_db.store_dir(path))
+    return 0
+
+
+def cmd_hosted_submit(args):
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.submissions import snapshot_workspace, SubmissionError
+
+    if str(args.track).upper() != "A":
+        _print("hosted submissions currently support track A only")
+        return 2
+    conn = hosted_db.connect(args.db)
+    try:
+        if hosted_db.get_run(conn, args.run_id) is None:
+            hosted_db.create_run(conn, args.run_id, args.track)
+        store = hosted_db.store_dir(args.db)
+        dest = store / args.run_id / "snapshots" / ("submission_%d"
+                                                    % int(__import__("time").time()))
+        try:
+            snapshot, tree_hash = snapshot_workspace(args.workspace, dest)
+        except SubmissionError as exc:
+            _print("submission rejected: %s" % exc.public_message)
+            return 2
+        submission_id = hosted_db.add_submission(conn, args.run_id, snapshot,
+                                                 tree_hash)
+        job_id = hosted_db.enqueue_job(conn, args.run_id, "official_eval")
+    finally:
+        conn.close()
+    _print("submitted run %r" % args.run_id)
+    _print("  snapshot   : %s" % snapshot)
+    _print("  tree hash  : %s" % tree_hash)
+    _print("  submission : #%d" % submission_id)
+    _print("  job queued : #%d (official_eval)" % job_id)
+    _print("next: ceb hosted worker run-once --db %s --eval-pack <private-pack>"
+           % args.db)
+    return 0
+
+
+def cmd_hosted_worker_run_once(args):
+    from ceb.hosted.worker import run_once
+
+    status = run_once(
+        args.db, eval_pack_dir=args.eval_pack, engine_jail=args.engine_jail,
+        quick_test_mode=args.quick_test_mode,
+        mode="final_eval" if args.final_eval else "official_round",
+        progress=lambda msg: _print("  " + msg))
+    _print(json.dumps(status, indent=2))
+    return 0 if status["status"] in ("done", "idle") else 2
+
+
+def cmd_hosted_result_show(args):
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.official_eval import load_result
+
+    conn = hosted_db.connect(args.db)
+    try:
+        results = hosted_db.results_for_run(conn, args.run_id)
+    finally:
+        conn.close()
+    if not results:
+        _print("no results for run %r" % args.run_id)
+        return 2
+    for row in results:
+        _print("result #%d  mode=%s  verified=%s  score=%s"
+               % (row["id"], row["mode"], bool(row["verified"]), row["score"]))
+        try:
+            result = load_result(row["result_path"])
+        except (OSError, ValueError):
+            _print("  (result file unavailable)")
+            continue
+        _print("  signature : %s" % result.get("signature", {}).get("status"))
+        metadata = result.get("metadata", {})
+        _print("  eval pack : %s (%s)" % (metadata.get("eval_pack_id"),
+                                          metadata.get("eval_pack_hash")))
+        _print("  file      : %s" % row["result_path"])
+    return 0
+
+
+def cmd_hosted_leaderboard(args):
+    from ceb.hosted import db as hosted_db
+
+    conn = hosted_db.connect(args.db)
+    try:
+        board = hosted_db.verified_leaderboard(conn, track=args.track)
+    finally:
+        conn.close()
+    _print("Hosted leaderboard — track %s (verified results only)"
+           % board["track"])
+    if not board["entries"]:
+        _print("  (no verified results)")
+        return 0
+    _print("  %-4s %-28s %-10s %s" % ("#", "run", "score", "mode"))
+    for i, entry in enumerate(board["entries"], 1):
+        _print("  %-4d %-28s %-10s %s" % (i, entry["run_id"], entry["score"],
+                                          entry["mode"]))
+    return 0
+
+
+def cmd_hosted_sign_result(args):
+    from ceb.hosted.official_eval import load_result
+    from ceb.hosted.signing import sign_result, get_signing_key
+
+    result = load_result(args.result)
+    sign_result(result)
+    Path(args.result).write_text(json.dumps(result, indent=2) + "\n",
+                                 encoding="utf-8")
+    status = result["signature"]["status"]
+    _print("result %s: %s" % (args.result, status))
+    if status == "unsigned":
+        _print("  (set CEB_SIGNING_KEY to sign; unsigned results have no "
+               "cryptographic authenticity)")
+    return 0
+
+
+def cmd_hosted_verify_result(args):
+    from ceb.hosted.verifier import verify_result_file
+
+    verdict = verify_result_file(args.result)
+    _print(json.dumps(verdict, indent=2))
+    return 0 if verdict["authentic"] else 2
 
 
 # ----- parser ----------------------------------------------------------------------
@@ -351,6 +545,9 @@ def build_parser():
                         "(recommended for untrusted submissions)")
     p.add_argument("--eval-pack", default=None,
                    help="private eval pack directory (operator only)")
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="none",
+                   help="confine the untrusted engine (official hosted "
+                        "policy: docker)")
     p.set_defaults(func=cmd_gate_run)
 
     rnd = sub.add_parser("round", help="official/quick evaluation rounds")
@@ -364,8 +561,14 @@ def build_parser():
     p.add_argument("--run-id", default=None)
     p.add_argument("--runs-dir", default=None, help="override runs/ root (tests)")
     p.add_argument("--sandbox", choices=["none", "docker"], default="none",
-                   help="run inside the Docker evaluator sandbox "
-                        "(recommended for untrusted submissions)")
+                   help="legacy harness-in-container mode; official hosted "
+                        "evaluation uses --engine-jail docker instead")
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="none",
+                   help="confine the untrusted engine (combines with "
+                        "--eval-pack: the pack is never mounted)")
+    p.add_argument("--final-eval", action="store_true",
+                   help="run a final_eval (leaderboard-quality; strict gate; "
+                        "no round-budget cost)")
     p.add_argument("--eval-pack", default=None,
                    help="private eval pack directory (operator only)")
     p.set_defaults(func=cmd_round_run)
@@ -418,12 +621,91 @@ def build_parser():
     p.add_argument("--openings-limit", type=int, default=None)
     p.add_argument("--eval-pack", default=None)
     p.add_argument("--runs-dir", default=None, help="override runs/ root (tests)")
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="none",
+                   help="confine the untrusted candidate engine")
+    p.add_argument("--runner", choices=["internal", "fastchess"],
+                   default="internal",
+                   help="match backend (fastchess is optional, high-volume)")
     p.set_defaults(func=cmd_track_b_round_run)
+
+    tb_official = tb_sub.add_parser("official",
+                                    help="source-first official pipeline")
+    tb_official_sub = tb_official.add_subparsers(dest="subsubcommand",
+                                                 required=True)
+    p = tb_official_sub.add_parser(
+        "run", help="scan + build + evaluate a candidate source tree")
+    p.add_argument("--candidate-src", required=True)
+    p.add_argument("--baseline-src", default=None,
+                   help="baseline tree (default: third_party/stockfish)")
+    p.add_argument("--eval-pack", default=None)
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="none")
+    p.add_argument("--build-script", default="ceb_build.sh")
+    p.add_argument("--engine-relpath", default="ceb_engine")
+    p.add_argument("--games", type=int, default=8)
+    p.add_argument("--movetime", type=int, default=100)
+    p.add_argument("--max-plies", type=int, default=300)
+    p.add_argument("--run-id", default="track_b_official")
+    p.add_argument("--runs-dir", default=None)
+    p.set_defaults(func=cmd_track_b_official_run)
+
+    scan = sub.add_parser("scan", help="anti-cheating scanners")
+    scan_sub = scan.add_subparsers(dest="subcommand", required=True)
+    p = scan_sub.add_parser("workspace", help="static scan of a submission")
+    p.add_argument("--track", default="A")
+    p.add_argument("--workspace", required=True)
+    p.add_argument("--json-out", default=None)
+    p.set_defaults(func=cmd_scan_workspace)
+    p = scan_sub.add_parser("track-b", help="scan a Track B candidate tree")
+    p.add_argument("--baseline-src", required=True)
+    p.add_argument("--candidate-src", required=True)
+    p.set_defaults(func=cmd_scan_track_b)
+
+    hosted = sub.add_parser("hosted", help="hosted official evaluation (MVP)")
+    hosted_sub = hosted.add_subparsers(dest="subcommand", required=True)
+    p = hosted_sub.add_parser("init", help="initialize the hosted database")
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.set_defaults(func=cmd_hosted_init)
+    p = hosted_sub.add_parser("submit", help="snapshot + enqueue a workspace")
+    p.add_argument("--track", default="A")
+    p.add_argument("--workspace", required=True)
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.set_defaults(func=cmd_hosted_submit)
+    worker = hosted_sub.add_parser("worker", help="official evaluation worker")
+    worker_sub = worker.add_subparsers(dest="subsubcommand", required=True)
+    p = worker_sub.add_parser("run-once", help="process one queued job")
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--eval-pack", default=None,
+                   help="private eval pack (REQUIRED to verify)")
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="none")
+    p.add_argument("--final-eval", action="store_true",
+                   help="run a final_eval instead of an official round")
+    p.add_argument("--quick-test-mode", action="store_true",
+                   help="tiny toy config for CI/smoke (profile recorded)")
+    p.set_defaults(func=cmd_hosted_worker_run_once)
+    result = hosted_sub.add_parser("result", help="inspect results")
+    result_sub = result.add_subparsers(dest="subsubcommand", required=True)
+    p = result_sub.add_parser("show", help="show results for a run")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.set_defaults(func=cmd_hosted_result_show)
+    p = hosted_sub.add_parser("leaderboard", help="verified-only leaderboard")
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--track", default="A")
+    p.set_defaults(func=cmd_hosted_leaderboard)
+    p = hosted_sub.add_parser("sign-result", help="sign a result file")
+    p.add_argument("--result", required=True)
+    p.set_defaults(func=cmd_hosted_sign_result)
+    p = hosted_sub.add_parser("verify-result", help="verify a result file")
+    p.add_argument("--result", required=True)
+    p.set_defaults(func=cmd_hosted_verify_result)
 
     return parser
 
 
 def main(argv=None):
+    from ceb.sanitize import debug_enabled, sanitize_exception
+
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -434,6 +716,13 @@ def main(argv=None):
     except FileNotFoundError as exc:
         _print("error: %s" % exc)
         return 2
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 - agent-facing output must be sanitized
+        if debug_enabled():
+            raise
+        _print("error: %s" % sanitize_exception(exc))
+        return 3
 
 
 if __name__ == "__main__":

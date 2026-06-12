@@ -43,10 +43,19 @@ round_modes:
     max_plies: 120
     openings_limit: 2     # first N openings of the resolved suite
     anchors: []
-  official:               # consumes one unit of official round budget
+  official_round:         # consumes one unit of official round budget; strict gate
     opponents: [BenchRandom, BenchGreedyCapture, BenchMaterial1, BenchPST1, BenchMiniMax2, BenchAlphaBeta3]
     games_per_opponent: 4
     movetime_ms: 200
     max_plies: 200
     openings_limit: 6
     anchors: []
+  final_eval:             # leaderboard-quality evaluation; strict gate; no budget cost
+    opponents: [BenchRandom, BenchGreedyCapture, BenchMaterial1, BenchPST1, BenchMiniMax2, BenchAlphaBeta3]
+    games_per_opponent: 8
+    movetime_ms: 200
+    max_plies: 200
+    openings_limit: 8
+    anchors: []
+    # Hosted final evals may set anchors plus:
+    # anchors_required: true

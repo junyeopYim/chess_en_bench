@@ -64,9 +64,33 @@ def compute_round_score(match_reports, opponent_ratings=None, penalties=None):
         for kind, key in _FAULT_TO_PENALTY_KEY.items()
     )
     final = round(ladder - penalty_total, 1) if ladder is not None else None
+
+    # Overall aggregate with a 95% CI on the pooled score rate (vs a mixed
+    # opponent pool, so the Elo CI is indicative, not a single-opponent
+    # rating).
+    total_w = sum(e["wins"] for e in per_opponent)
+    total_d = sum(e["draws"] for e in per_opponent)
+    total_l = sum(e["losses"] for e in per_opponent)
+    total_games = total_w + total_d + total_l
+    overall = {
+        "games": total_games,
+        "wins": total_w, "draws": total_d, "losses": total_l,
+        "score_rate": None,
+        "delta_elo_vs_pool": None,
+        "delta_elo_ci95": None,
+    }
+    if total_games > 0:
+        lo, mid, hi = elo.delta_elo_ci(total_w, total_d, total_l)
+        overall["score_rate"] = round(
+            elo.clamp_rate(elo.score_rate(total_w, total_d, total_l),
+                           total_games), 4)
+        overall["delta_elo_vs_pool"] = round(mid, 1)
+        overall["delta_elo_ci95"] = [round(lo, 1), round(hi, 1)]
+
     return {
         "schema": "ceb.score.track_a/v1",
         "per_opponent": per_opponent,
+        "overall": overall,
         "faults": fault_totals,
         "penalty_points": penalty_total,
         "ladder_score": round(ladder, 1) if ladder is not None else None,
@@ -74,12 +98,20 @@ def compute_round_score(match_reports, opponent_ratings=None, penalties=None):
     }
 
 
-def compute_leaderboard(results_dir, track="A", include_quick=False):
-    """Scan runs/*/state.json + round reports and rank by best valid round.
+# Mode classification for leaderboard eligibility. "official" is the legacy
+# v0.2 record name for official rounds.
+OFFICIAL_MODES = {"official", "official_round"}
+FINAL_MODES = {"final_eval"}
 
-    Official policy: only official rounds count. include_quick=True is a
-    diagnostic mode that also considers quick rounds; never use it for
-    official rankings.
+
+def compute_leaderboard(results_dir, track="A", include_quick=False):
+    """Scan runs/*/state.json + round reports and rank runs.
+
+    Selection per run: the best final_eval result if any exists, otherwise
+    the best official round. Quick rounds NEVER count unless
+    include_quick=True (a diagnostic view, never an official ranking).
+    Entries from this scanner are self-reported: verified is always false —
+    verified results come only from the hosted worker (ceb hosted ...).
 
     Returns {"schema": ..., "track": ..., "entries": [...]}, best first.
     """
@@ -94,27 +126,46 @@ def compute_leaderboard(results_dir, track="A", include_quick=False):
             if state.get("track", "A").upper() != track.upper():
                 continue
             rounds = state.get("rounds", [])
-            best = None
+            best_official = None
+            best_final = None
+            best_quick = None
             for rnd in rounds:
                 score = rnd.get("score")
                 mode = rnd.get("mode", "official")
                 if score is None:
                     continue
-                if not include_quick and mode != "official":
-                    continue
-                if best is None or score > best["score"]:
-                    best = {"round": rnd.get("round"), "score": score,
-                            "mode": mode}
+                slot = {"round": rnd.get("round"), "score": score, "mode": mode}
+                if mode in FINAL_MODES:
+                    if best_final is None or score > best_final["score"]:
+                        best_final = slot
+                elif mode in OFFICIAL_MODES:
+                    if best_official is None or score > best_official["score"]:
+                        best_official = slot
+                elif include_quick:
+                    if best_quick is None or score > best_quick["score"]:
+                        best_quick = slot
+            if include_quick:
+                # Diagnostic view: best score across every mode.
+                candidates = [c for c in (best_final, best_official, best_quick)
+                              if c is not None]
+                best = max(candidates, key=lambda c: c["score"]) if candidates else None
+            else:
+                # Official policy: final eval beats official rounds; quick
+                # rounds never count.
+                best = best_final or best_official
             entries.append({
                 "run_id": state.get("run_id", state_path.parent.name),
                 "workspace": state.get("workspace"),
                 "gate_passed": bool(state.get("gate", {}).get("passed")),
                 "rounds_played": len(rounds),
                 "official_rounds_played": sum(
-                    1 for r in rounds if r.get("mode", "official") == "official"),
+                    1 for r in rounds
+                    if r.get("mode", "official") in OFFICIAL_MODES | FINAL_MODES),
                 "best_round": best,
                 "score": best["score"] if best else None,
+                "verified": False,  # self-reported; hosted worker results only
             })
     entries.sort(key=lambda e: (e["score"] is None, -(e["score"] or 0)))
     return {"schema": "ceb.leaderboard/v1", "track": track.upper(),
-            "include_quick": include_quick, "entries": entries}
+            "include_quick": include_quick, "verified_only": False,
+            "entries": entries}

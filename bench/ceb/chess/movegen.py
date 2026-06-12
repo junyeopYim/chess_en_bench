@@ -275,3 +275,27 @@ def is_checkmate(board):
 
 def is_stalemate(board):
     return not in_check(board) and not generate_legal(board)
+
+
+def is_insufficient_material(board):
+    """Dead-draw material: K vs K, K+B vs K, K+N vs K.
+
+    Conservative by design — anything else (including K+N+N vs K and
+    opposite-bishop endings) is treated as sufficient.
+    """
+    minors = []
+    for piece in board.squares:
+        if piece == EMPTY or piece in "Kk":
+            continue
+        if piece in "BbNn":
+            minors.append(piece)
+        else:
+            return False  # any pawn, rook, or queen is sufficient
+    return len(minors) <= 1
+
+
+def repetition_key(board):
+    """Position identity for repetition detection: placement, side to move,
+    castling rights, and en passant square (clocks excluded)."""
+    ep = board.ep_square if board.ep_square is not None else -1
+    return ("".join(board.squares), board.side_to_move, board.castling, ep)

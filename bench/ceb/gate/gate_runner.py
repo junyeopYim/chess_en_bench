@@ -90,11 +90,14 @@ def _merged_gate_config(root):
 
 
 class _Gate:
-    def __init__(self, workspace, track, root, quick_match, strict, pack):
+    def __init__(self, workspace, track, root, quick_match, strict, pack,
+                 engine_jail="none"):
         self.workspace = Path(workspace).resolve()
         self.root = root
         self.strict = strict
         self.pack = pack
+        self.engine_jail = engine_jail
+        self.engine_cwd = None
         self.config = _merged_gate_config(root)
         if strict:
             self.config["perft_required"] = True
@@ -132,9 +135,15 @@ class _Gate:
         build = self.workspace / "build.sh"
         if not build.exists():
             return STATUS_PASS, "no build.sh (prebuilt engine)"
+        # Untrusted builds run inside the engine jail when one is selected
+        # (workspace writable, still no network / no repo access).
+        from ceb.jail import build_workspace_command
+        jailed = build_workspace_command(self.workspace, self.engine_jail)
+        argv = jailed if jailed else ["bash", str(build)]
+        cwd = None if jailed else str(self.workspace)
         try:
             proc = subprocess.run(
-                ["bash", str(build)], cwd=str(self.workspace),
+                argv, cwd=cwd,
                 capture_output=True, text=True, timeout=120,
             )
         except subprocess.TimeoutExpired:
@@ -154,11 +163,16 @@ class _Gate:
                 engine.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             except OSError:
                 return STATUS_FAIL, "./engine is not executable"
-        self.engine_cmd = [str(engine)]
-        return STATUS_PASS, "engine executable found"
+        from ceb.jail import engine_command
+        self.engine_cmd, self.engine_cwd = engine_command(self.workspace,
+                                                          self.engine_jail)
+        detail = "engine executable found"
+        if self.engine_jail != "none":
+            detail += " (jail: %s)" % self.engine_jail
+        return STATUS_PASS, detail
 
     def _client(self):
-        return UCIClient(self.engine_cmd, cwd=str(self.workspace), name="candidate")
+        return UCIClient(self.engine_cmd, cwd=self.engine_cwd, name="candidate")
 
     def check_handshake(self):
         timeout = float(self.config["handshake_timeout_s"])
@@ -273,7 +287,7 @@ class _Gate:
             max_plies=int(cfg.get("max_plies", 60)),
             candidate_name="candidate",
             opponent_name=cfg.get("opponent", "BenchRandom"),
-            candidate_cwd=str(self.workspace),
+            candidate_cwd=self.engine_cwd,
         )
         faults = report["candidate_faults"]
         total_faults = sum(faults.values())
@@ -299,24 +313,32 @@ class _Gate:
             ("mini_match", "mini match smoke", self.check_mini_match, True),
         ]
         aborted = False
-        for check_id, name, fn, hard in order:
-            if aborted:
-                self._skip(check_id, name)
-                continue
-            result = self._timed(check_id, name, fn)
-            if result.status == STATUS_FAIL and hard:
-                aborted = True
+        try:
+            for check_id, name, fn, hard in order:
+                if aborted:
+                    self._skip(check_id, name)
+                    continue
+                result = self._timed(check_id, name, fn)
+                if result.status == STATUS_FAIL and hard:
+                    aborted = True
+        finally:
+            if self.engine_jail != "none":
+                from ceb.jail import cleanup_jails
+                cleanup_jails()
         self.report.finish()
         return self.report
 
 
 def run_gate(workspace, track="A", root=None, quick_match=True, strict=False,
-             eval_pack=None):
+             eval_pack=None, engine_jail="none"):
     """Run the gate against a submission workspace. Returns GateReport.
 
     strict: official-round policy — 'go perft' becomes mandatory.
     eval_pack: a ceb.eval_pack.EvalPack supplying the FEN/perft sets;
-    defaults to the public pack.
+    defaults to the public pack. The pack is read by the evaluator only and
+    is never exposed to the engine, jailed or not.
+    engine_jail: 'none' (host execution) or 'docker' (the untrusted engine
+    runs in the jail; official hosted policy).
     """
     if root is None:
         root = paths.find_repo_root()
@@ -325,7 +347,8 @@ def run_gate(workspace, track="A", root=None, quick_match=True, strict=False,
     if eval_pack is None:
         from ceb.eval_pack import load_public_pack
         eval_pack = load_public_pack(root)
-    return _Gate(workspace, "A", root, quick_match, strict, eval_pack).run()
+    return _Gate(workspace, "A", root, quick_match, strict, eval_pack,
+                 engine_jail=engine_jail).run()
 
 
 def save_gate_report(report, out_path=None, root=None):

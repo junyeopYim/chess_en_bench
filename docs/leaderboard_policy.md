@@ -4,24 +4,29 @@ How runs are ranked. Implementation: `compute_leaderboard` in
 `bench/ceb/scoring/track_a.py`, exposed via the `ceb leaderboard compute`
 CLI and the `/api/leaderboard` endpoint (`bench/ceb/api/main.py`).
 
-## Ranking rule: best valid OFFICIAL round per run
+## Ranking rule: best verified-eligible result per run
 
-The leaderboard scans `<results>/*/state.json` (default `runs/`). For each
-run whose `track` field matches the requested track:
+The local leaderboard scans `<results>/*/state.json` (default `runs/`). For
+each run whose `track` field matches the requested track:
 
 1. Walk the run's recorded rounds.
-2. Keep rounds whose `score` is not null AND whose mode is `official`.
-   Rounds recorded without a `mode` field count as official (legacy runs
-   written before modes were recorded).
-3. The run's leaderboard score is the **maximum** such score; the entry
-   records which round produced it (`best_round`: round number, score, mode).
+2. Select, per run, the best (`score` not null) `final_eval` result if any
+   exists, otherwise the best `official_round`. Rounds recorded as `official`
+   (legacy runs written before modes were renamed) count as official rounds.
+   Quick rounds never count.
+3. The run's leaderboard score is that selected score; the entry records
+   which round produced it (`best_round`: round number, score, mode).
 4. Runs are sorted best-first; unreadable or non-JSON `state.json` files are
    skipped silently.
 
 Each entry contains: `run_id`, `workspace`, `gate_passed`, `rounds_played`
-(all rounds), `official_rounds_played`, `best_round`, `score`. Output schema
-is `ceb.leaderboard/v1` with an `include_quick` field recording which view
-produced the board.
+(all rounds), `official_rounds_played` (official + final, excluding quick),
+`best_round`, `score`, and `verified`. This scanner reads self-reported local
+runs, so `verified` is always `false` and the board JSON sets
+`verified_only: false`. Cryptographically **verified** official results come
+only from the hosted worker; see `docs/LEADERBOARD_GOVERNANCE.md`. Output
+schema is `ceb.leaderboard/v1` with an `include_quick` field recording which
+view produced the board.
 
 ## Why quick rounds are excluded
 

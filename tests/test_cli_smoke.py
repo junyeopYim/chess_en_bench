@@ -25,6 +25,47 @@ def test_v02_flags_parse():
     assert args.games == 4
 
 
+def test_v03_flags_parse():
+    parser = build_parser()
+    args = parser.parse_args(["gate", "run", "--workspace", "x",
+                              "--engine-jail", "docker"])
+    assert args.engine_jail == "docker"
+    args = parser.parse_args(["round", "run", "--workspace", "x", "--round",
+                              "1", "--final-eval", "--engine-jail", "docker"])
+    assert args.final_eval and args.engine_jail == "docker"
+    args = parser.parse_args(["scan", "workspace", "--workspace", "x"])
+    assert args.func.__name__ == "cmd_scan_workspace"
+    args = parser.parse_args(["hosted", "worker", "run-once", "--db", "d",
+                              "--eval-pack", "p", "--quick-test-mode"])
+    assert args.quick_test_mode and args.eval_pack == "p"
+    args = parser.parse_args(["hosted", "submit", "--workspace", "w",
+                              "--run-id", "r"])
+    assert args.run_id == "r"
+    args = parser.parse_args(["track-b", "official", "run",
+                              "--candidate-src", "c"])
+    assert args.candidate_src == "c"
+    args = parser.parse_args(["track-b", "round", "run", "--candidate-engine",
+                              "a", "--baseline-engine", "b", "--runner",
+                              "fastchess"])
+    assert args.runner == "fastchess"
+
+
+def test_hosted_cli_smoke(tmp_path, capsys):
+    db = str(tmp_path / "hosted.sqlite")
+    example = str(REPO_ROOT / "examples" / "submissions" / "minimal_uci_engine_python")
+    pack = str(REPO_ROOT / "examples" / "eval_packs" / "tiny_private")
+    assert main(["hosted", "init", "--db", db]) == 0
+    assert main(["hosted", "submit", "--track", "A", "--workspace", example,
+                 "--run-id", "cli_hosted", "--db", db]) == 0
+    capsys.readouterr()
+    assert main(["hosted", "worker", "run-once", "--db", db,
+                 "--eval-pack", pack, "--quick-test-mode"]) == 0
+    assert '"verified": true' in capsys.readouterr().out
+    assert main(["hosted", "leaderboard", "--db", db, "--track", "A"]) == 0
+    out = capsys.readouterr().out
+    assert "cli_hosted" in out and "verified results only" in out
+
+
 def test_doctor_runs(capsys):
     assert main(["doctor"]) == 0
     out = capsys.readouterr().out
