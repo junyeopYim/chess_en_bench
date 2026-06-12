@@ -1,5 +1,12 @@
 # 결정 사항
 
+- 2026-06-13 — v0.3.5: 검증 Track B는 bench/속도 검사를 **지원**받아야 한다 — 신뢰 베이스라인이 bench NPS를 보고하지 않으면(미지원) verified는 실패한다(`--dev-allow-no-bench`만 `diagnostic-no-bench`로 강등). "미지원=통과"는 검증 경로에서 폐기.
+- 2026-06-13 — v0.3.5: 검증 Track B bench는 후보가 감옥 명령 구성에 실패해도 호스트에서 bench하지 않는다(호스트 폴백 제거, `_run_bench(require_candidate_jail=...)`). 결과 메타데이터에 `bench_required/supported/passed/nps_ratio/min_nps_ratio/bench_policy` 기록.
+- 2026-06-13 — v0.3.5: strict Track B readiness는 bench 역량을 **증명**해야 한다 — `--track-b-baseline-engine`이 실제 `bench` NPS를 보고할 때만 `track_b_bench_capability` 통과(미증명이면 strict 선언 차단). 정책 문장만으로는 부족.
+- 2026-06-13 — v0.3.5: 전용 선언 게이트 `ceb hosted readiness declare`(항상 strict) 추가 — `public_official_declaration == ready`일 때만 exit 0, `--json`은 JSON 전용, `declaration_certificate`(스키마 `ceb.hosted.declaration_certificate/v1`) 포함. 비-strict `readiness check`는 진단용.
+- 2026-06-13 — v0.3.5: 릴리스 매니페스트는 공개 배포용으로 Ed25519 서명한다(`release-manifest create --private-key`/`sign`/`verify`). authentic은 **out-of-band 공개키**로만 참 — 미서명은 읽을 수 있으나 authentic 아님, 임베디드 키 검증은 내부 일관성일 뿐.
+- 2026-06-13 — v0.3.5: 커밋 안전한 공개 공식 체크리스트 아티팩트 `ceb hosted release-checklist create`(해시·지문·정책만, 비밀/사설 경로 없음) 추가 — 릴리스 거버넌스용(보안 장벽 아님).
+- 2026-06-13 — v0.3.5: 모든 dev 플래그 진단 결과는 `verified:false` + `diagnostic-*` 등급 + `diagnostic_reason` + `public_official_eligible:false`를 달아 verified와 혼동 불가하게 한다. `result show`는 "DIAGNOSTIC — NOT PUBLIC OFFICIAL" 표시, 번들은 기본적으로 진단 결과 거부.
 - 2026-06-13 — v0.3.4: 어떤 `--dev-*` 플래그도 verified를 유지하지 못한다. 특히 Track B bench 실패 시 `--dev-allow-no-bench`는 통과가 아니라 `diagnostic-no-bench` 강등(리더보드 제외).
 - 2026-06-13 — v0.3.4: `stockfish-lock` 베이스라인 신뢰는 git HEAD 일치만으로 부족하다 — 작업 트리·서브모듈 clean + 콘텐츠 해시 기록을 요구한다(dirty/untracked는 신뢰 불가).
 - 2026-06-13 — v0.3.4: verifiable 프로파일은 스캔/게이트/빌드/매치 전에 Ed25519 키를 로드 검증한다(`require_ed25519_private_key`) — 손상 키는 조기 실패하고 서명 실패로 스테이징된 공개 아티팩트를 남기지 않는다.

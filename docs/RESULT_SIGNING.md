@@ -228,12 +228,53 @@ ceb hosted release-manifest create --track A --eval-pack <dir> \
 지문을 운영자가 대역 외로 배포한 실제 공개 키와 대조한 뒤, 그 공개 키로
 `ceb hosted verify-result --public-key`를 돌려 `authentic`을 확인한다.
 
+## 서명된 릴리스 매니페스트 (Ed25519, `release_manifest.py`)
+
+릴리스 매니페스트는 비밀이 없지만 **배포되는(distributed)** 아티팩트이므로,
+공개 배포 시에는 운영자의 Ed25519 키로 **서명되어야 한다**. 서명은 공식 결과와
+**같은 방식**으로, 자신의 `signature` 블록을 제외한 정규 매니페스트
+(canonical manifest minus signature)에 대해 이루어진다. HMAC은 받지 않는다 —
+공개 매니페스트는 공개 검증 가능한 서명을 실어야 한다.
+
+```bash
+# 생성하며 바로 서명(--private-key 또는 CEB_SIGNING_PRIVATE_KEY가 있으면 서명,
+# 둘 다 없으면 읽을 수는 있으나 서명되지 않은 매니페스트를 쓴다)
+ceb hosted release-manifest create --track A --eval-pack <dir> \
+  --official-pack-hash <hash> --public-key pub.pem \
+  --private-key op.pem --out release.json
+
+# 이미 만든 매니페스트에 서명
+ceb hosted release-manifest sign --manifest release.json --private-key op.pem
+
+# 검증(진정성 판정을 보려면 대역 외 공개 키를 준다)
+ceb hosted release-manifest verify --manifest release.json --public-key op.pem
+```
+
+검증 규칙은 결과 서명과 동일하다(`verify_release_manifest`):
+
+- **`authentic`은 대역 외(out-of-band) 공개 키로 검증했을 때만 `true`다.**
+  `--public-key`를 주면 `signature_trust="supplied-public-key"`가 되고, 서명이
+  맞으면 `authentic=true`다.
+- **서명되지 않은 매니페스트는 읽을 수는 있으나 결코 진정하지 않다**
+  (`signed=false`, `authentic=false`).
+- **임베드 키로만 검증**(`--public-key` 없이)하면
+  `signature_trust="embedded-self-described"`이고 `authentic=false`다 — 자기
+  일관성(internal consistency)일 뿐 진정성 증명이 아니다.
+- Ed25519가 아닌 서명(예: 어떤 식으로든 HMAC이 붙은 경우)은 거부되어
+  `authentic=false`다.
+
+`GET /api/hosted/release-manifest`는 `CEB_RELEASE_MANIFEST`에 놓인 (서명된)
+JSON을 그대로 제공한다. 결과 번들은 이 서명된 매니페스트를 함께 담으며
+(`release_manifest.json`), `VERIFY.txt`에는 이를 검증하는 명령
+`ceb hosted release-manifest verify --manifest release_manifest.json
+--public-key <operator.pem>`이 안내된다.
+
 ## 메타데이터 블록
 
 `build_metadata`가 조립하며 모든 필드는 항상 존재한다. 호스트에서 결정할 수
 없는 필드는 생략되지 않고 명시적으로 `null`이다(예: git 트리가 아니면
 `git_commit=null`, docker 미빌드면 이미지 digest=`null`). `benchmark_version`은
-`ceb.__version__`(현재 `0.3.4`), `engine_jail_image_digest`는 감옥 이미지
+`ceb.__version__`(현재 `0.3.5`), `engine_jail_image_digest`는 감옥 이미지
 `chess-en-bench-jail:0.4`를 가리킨다. null은 재현성 저하를 숨기지 않고 명시적
 감사 신호로 드러낸다.
 

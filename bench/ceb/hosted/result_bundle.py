@@ -137,7 +137,7 @@ def export_result_bundle(conn, run_id, out_zip, db_path, *,
 
         manifest = {
             "schema": SCHEMA,
-            "version": "v0.3.4",
+            "version": "v0.3.5",
             "run_id": run_id,
             "track": run["track"],
             "verified": bool(best),
@@ -160,8 +160,14 @@ def export_result_bundle(conn, run_id, out_zip, db_path, *,
                            "matches this fingerprint before trusting it.\n"
                            % fingerprint)
         if manifest_included:
-            verify_txt += ("\nrelease_manifest.json pins this season's anchors "
-                           "(pack hash, key fingerprint, image digests).\n")
+            verify_txt += (
+                "\nrelease_manifest.json pins this season's anchors (pack hash, "
+                "key fingerprint, image digests). When the operator signs it, "
+                "verify its authenticity with the OUT-OF-BAND public key:\n"
+                "  ceb hosted release-manifest verify \\\n"
+                "      --manifest release_manifest.json \\\n"
+                "      --public-key <operator_public_key.pem>\n"
+                "An unsigned manifest is readable but not authentic.\n")
         zf.writestr("VERIFY.txt", verify_txt)
     extra = ["bundle_manifest.json", "VERIFY.txt"]
     if manifest_included:

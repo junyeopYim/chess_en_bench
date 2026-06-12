@@ -72,3 +72,17 @@ def verify_result_file(path, *, public_key=None, hmac_key=None):
                             and public_official_signing
                             and not verdict["metadata_missing_keys"])
     return verdict
+
+
+def verify_release_manifest_file(path, *, public_key=None):
+    """Verify a signed release-manifest file. Returns a JSON-serializable verdict.
+
+    `authentic` is true only when the manifest's Ed25519 signature checks out
+    against an OUT-OF-BAND public key. An unsigned manifest is readable but never
+    authentic (v0.3.5, req 3)."""
+    from ceb.hosted.release_manifest import verify_release_manifest
+    manifest = load_result(path)
+    verdict = verify_release_manifest(manifest, public_key=public_key)
+    verdict["manifest_path"] = str(path)
+    verdict["manifest_schema"] = manifest.get("schema")
+    return verdict

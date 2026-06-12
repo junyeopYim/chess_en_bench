@@ -3,19 +3,28 @@
 통제되고 재현 가능한 조건에서 **체스 엔진을 처음부터 만들거나**(Track A) **Stockfish의
 탐색을 최적화하는**(Track B) LLM 코딩 에이전트를 위한 벤치마크 플랫폼이다.
 
-**v0.3.4는 "공개 공식 단일 노드 호스트형 벤치마크"다 — Track A와 Track B 모두에서.** 단,
-저장소가 공개 공식 단일 노드로 선언될 수 있는 것은 오직 `ceb hosted readiness check
---strict-public-official`이 통과할 때뿐이다. 단일 노드(SQLite + 로컬 FS)라는 사실은 정직하게
+**v0.3.5는 "공개 공식 단일 노드 호스트형 벤치마크"다 — Track A와 Track B 모두에서.** 단,
+저장소가 공개 공식 단일 노드로 선언될 수 있는 것은 오직 `ceb hosted readiness declare
+--track BOTH`(또는 `ceb hosted readiness check --strict-public-official --track BOTH`)가
+통과할 때뿐이다. 단일 노드(SQLite + 로컬 FS)라는 사실은 정직하게
 유지한다 — 분산 프로덕션 서비스가 아니다. 핵심은 *우연히* `verified`가 만들어질 수 없게 하는
-것이다. v0.3.3 위에 v0.3.4는 마지막 모호함을 제거하는 공개 공식 감사 강화다. (1) 어떤
-`--dev-*` 플래그도 `verified=true`를 유지하지 못한다 — `--dev-allow-no-bench`를 쓴 bench/속도
-정합성 실패는 통과가 아니라 `verified: false`(등급 `diagnostic-no-bench`)로 **강등**되며, 플래그가
-없으면 **하드 실패**(결과 없음)다. (2) **베이스라인 콘텐츠 무결성** — `stockfish-lock` 모드는
-HEAD가 `tracks/b_stockfish_opt/stockfish.lock`과 일치하고 작업 트리·서브모듈이 깨끗할 때만
-신뢰하며 더럽거나 추적되지 않은 체크아웃은 신뢰하지 않는다. (3) **평가 전 Ed25519 키 로드** —
-검증 프로파일은 정적 스캔·엄격 게이트·빌드·매치 **이전에** 서명 키를 해석·로드 검증하므로
-서명 실패로 스테이징된 공개 아티팩트가 남지 않는다. (4) 준비 점검이 단일 선언 게이트가 된다
-(`public_official_declaration`, `--track BOTH`, JSON 전용 `--json`). 모든 신뢰 닻은 여전히
+것이다. v0.3.4 위에 v0.3.5는 선언의 마지막 빈틈을 닫는 공개 공식 감사 강화다. (1) **전용 선언 게이트**
+`ceb hosted readiness declare`가 생겼다 — 항상 엄격 공개 공식 정책이며,
+`public_official_declaration == "ready"`일 때만 종료 코드 0이고, 비밀 없는
+`declaration_certificate`(`ceb.hosted.declaration_certificate/v1`)를 함께 담는다. (2) **검증된
+Track B는 bench 역량을 증명**한다 — 신뢰 베이스라인이 bench NPS를 보고하지 못하면 검증된 Track B는
+**실패**하고(예전의 "미지원=조용한 통과"는 사라졌다), 후보의 감옥 bench 명령 구성이 실패하면
+호스트 폴백 없이 **거부**된다. 엄격 Track B 준비는 bench 가능 베이스라인(`--track-b-baseline-engine`)에
+실제로 bench를 돌려 NPS 보고를 확인하는 BLOCKING 점검 `track_b_bench_capability`를 추가한다.
+(3) **서명·검증 가능한 릴리스 매니페스트**(Ed25519) — `release-manifest create --private-key`로 직접
+서명하거나 `release-manifest sign`/`release-manifest verify`로 다룬다. 대역 외 공개 키로만
+`authentic: true`이며 미서명 매니페스트는 읽을 수는 있어도 진정하지 않다. (4) **공개 공식 릴리스
+체크리스트** `release-checklist create`가 해시·지문·정책만 담은 커밋 안전 Markdown을 생성한다(비밀
+없음; 보안 장벽이 아니라 거버넌스 문서). (5) 모든 진단 결과는 `verified: false`,
+`diagnostic-`로 시작하는 등급, 평문 `diagnostic_reason`, `public_official_eligible: false`를 달고
+다녀 검증 결과와 혼동할 수 없다. 어떤 `--dev-*` 플래그도 `verified=true`를 유지하지 못한다 —
+`--dev-allow-no-bench`를 쓴 bench/속도 정합성 실패는 통과가 아니라 `verified: false`(등급
+`diagnostic-no-bench`)로 **강등**되며, 플래그가 없으면 **하드 실패**(결과 없음)다. 모든 신뢰 닻은 여전히
 **고정(pinning)** 된다: 검증된 결과는 **핀된**
 신뢰 공식 평가 팩을 요구하고, Track B는 추가로 **신뢰되는 베이스라인** + **해시 핀된 빌드
 래퍼** + 검증된 빌드 출력 + bench 정합성을 요구하며, 모두 Ed25519 서명되고 엄격 준비 게이트를
@@ -46,11 +55,12 @@ python -m pip install --upgrade pip
 python -m pip install -e ".[dev,server,hosted]"   # hosted extra adds Ed25519 signing (cryptography)
 
 ceb doctor                       # environment diagnosis
-pytest -q                        # 289 passed + 6 skipped (Docker tests opt-in: CEB_DOCKER_TESTS=1)
+pytest -q                        # 311 passed + 6 skipped (317 with CEB_DOCKER_TESTS=1)
 ```
 
-준비 점검이 **단일 선언 게이트**다. 공개 공식 호스팅형 배포를 운영하기 전에 준비 상태를
-확인한다(`ceb` 버전 >= 0.3.4, DB 스키마, Docker + 감옥 이미지, **핀된 신뢰** 공식 평가 팩,
+전용 선언 게이트 `ceb hosted readiness declare --track BOTH`(또는 진단용 `ceb hosted readiness
+check --strict-public-official --track BOTH`)가 **공식 선언 게이트**다. 공개 공식 호스팅형 배포를
+운영하기 전에 준비 상태를 확인한다(`ceb` 버전 >= 0.3.5, DB 스키마, Docker + 감옥 이미지, **핀된 신뢰** 공식 평가 팩,
 데모 팩 거부, Ed25519 서명 키 + 공개 키 + **키쌍 일치(keypair match)**, 프로파일 정책,
 `final-production` 게임 바닥선, Track B 빌드 래퍼, 관리자 토큰 등을 점검. 보고서 스키마는
 `ceb.hosted.readiness/v2`, 각 항목은 `checks[name, ok, required, detail]`이며,
@@ -69,10 +79,17 @@ ceb hosted readiness check --db runs/hosted.sqlite --eval-pack <official-pack> \
 # 키쌍 일치/final-production 바닥선. Track B는 추가로 빌드 감옥 이미지/빌드 래퍼(존재+실행
 # 가능+트리 밖+해시 핀)/베이스라인 신뢰(콘텐츠 해시 핀 또는 깨끗한 stockfish-lock)/bench
 # 정책(강제, 우회 불가: 실패한 bench나 --dev-allow-no-bench는 강등될 뿐 검증되지 않음)/
-# Track B API 엔드포인트 import 가능.
+# bench 역량 증명(--track-b-baseline-engine에 실제 bench를 돌려 NPS 보고를 확인하는 BLOCKING
+# 점검 track_b_bench_capability; 없으면 엄격 Track B 선언이 막힌다)/Track B API 엔드포인트 import 가능.
 ceb hosted readiness check --db runs/hosted.sqlite --eval-pack <official-pack> \
     --public-key op.pub.pem --signing-key op.pem --official-pack-hash <sha256:...> \
-    --track BOTH --strict-public-official
+    --track-b-baseline-engine <bench-capable-engine> --track BOTH --strict-public-official
+
+# 전용 선언 게이트: 항상 엄격 공개 공식 정책, declaration=="ready"일 때만 종료 0.
+# 비밀 없는 declaration_certificate(ceb.hosted.declaration_certificate/v1)를 담는다.
+ceb hosted readiness declare --db runs/hosted.sqlite --eval-pack <official-pack> \
+    --public-key op.pub.pem --signing-key op.pem --official-pack-hash <sha256:...> \
+    --track-b-baseline-engine <bench-capable-engine> --track BOTH --json
 ```
 
 한 시즌의 모든 공개 신뢰 닻을 고정하는 비밀 없는 릴리스 매니페스트(`ceb.release_manifest/v1`)를
@@ -82,12 +99,21 @@ ceb hosted readiness check --db runs/hosted.sqlite --eval-pack <official-pack> \
 `enforced_when_baseline_supports_bench`, `override_downgrades_to_diagnostic`), 리더보드 정책,
 알려진 한계. 비공개 키·비공개 팩 경로·숨은 FEN/오프닝 id·비공개 아티팩트 경로는 일절 담지
 않는다(설계상 비밀 없음). 핀된 공식 팩 해시와 공개 키가 **필수**이며, Track B는 정확히
-베이스라인 1개·래퍼 1개 해시를 요구한다(모호하면 오류):
+베이스라인 1개·래퍼 1개 해시를 요구한다(모호하면 오류). 공개 배포용 매니페스트는 **Ed25519로 서명**해야
+한다 — `create --private-key`로 바로 서명하거나(`CEB_SIGNING_PRIVATE_KEY`도 가능) 나중에 `sign`으로
+서명하고, 누구나 대역 외 공개 키로 `verify`한다(대역 외 키로만 `authentic: true`):
 
 ```bash
 ceb hosted release-manifest create --track A --eval-pack <official-pack> \
-    --official-pack-hash <sha256:...> --public-key op.pub.pem --out release_A.json
+    --official-pack-hash <sha256:...> --public-key op.pub.pem --out release_A.json \
+    --private-key op.pem                  # 서명; 키 없이 만들면 읽을 수는 있어도 미서명
 # Track B는 추가로 --track-b-baseline-hash <sha256:...> --build-wrapper-hash <sha256:...>
+ceb hosted release-manifest sign   --manifest release_A.json --private-key op.pem
+ceb hosted release-manifest verify --manifest release_A.json --public-key op.pub.pem
+
+# 커밋 안전한 공개 공식 체크리스트(해시·지문·정책만, 비밀 없음; 거버넌스 문서):
+ceb hosted release-checklist create --track A --readiness-report readiness.json \
+    --release-manifest release_A.json --out PUBLIC_OFFICIAL_CHECKLIST.md
 
 export CEB_RELEASE_MANIFEST=release_A.json   # 공개 GET /api/hosted/release-manifest로 서빙
 ```

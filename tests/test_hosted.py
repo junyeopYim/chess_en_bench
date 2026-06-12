@@ -320,6 +320,8 @@ def test_dev_allow_demo_pack_is_never_verified(tmp_path, monkeypatch):
     assert result["verified"] is False
     assert result["verification_grade"] == "diagnostic-untrusted-pack"
     assert result["metadata"]["eval_pack_trusted"] is False
+    assert result["public_official_eligible"] is False
+    assert "demo" in result["diagnostic_reason"]
 
 
 def test_dev_unjailed_runs_but_is_not_verified(tmp_path):
@@ -333,6 +335,46 @@ def test_dev_unjailed_runs_but_is_not_verified(tmp_path):
     assert result["verified"] is False
     assert result["verification_grade"] == "diagnostic-unjailed"
     assert result["profile"] == "official"
+    assert result["public_official_eligible"] is False
+    assert "jail" in result["diagnostic_reason"]
+
+
+def _diag_track_a(tmp_path, monkeypatch, eval_pack, **flags):
+    """Run a Track A eval through the jail (mocked) + a stubbed match, returning
+    the result. Used to exercise the dev-flag downgrades (item 5)."""
+    import ceb.jail.docker_engine as de
+    import ceb.hosted.official_eval as oe
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    monkeypatch.setattr(oe, "run_round", lambda snapshot, rn, **kw: (
+        {"schema": "x", "mode": kw["mode"], "score": {"final_score": 0.0}},
+        {"schema": "fb"}, None))
+    return run_official_eval(
+        run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(eval_pack),
+        out_dir=tmp_path / "o", profile="official", engine_jail="docker", **flags)
+
+
+def test_dev_allow_unpinned_pack_is_diagnostic(tmp_path, monkeypatch, official_pack):
+    # --dev-allow-unpinned-pack: trusted but unpinned pack -> diagnostic, never
+    # verified, with the new labelling fields (item 5).
+    result = _diag_track_a(tmp_path, monkeypatch, official_pack,
+                           allow_unpinned_pack=True)
+    assert result["verified"] is False
+    assert result["verification_grade"] == "diagnostic-unpinned-pack"
+    assert result["public_official_eligible"] is False
+    assert "pin" in result["diagnostic_reason"]
+
+
+def test_dev_allow_unsigned_is_diagnostic(tmp_path, monkeypatch, official_pack):
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    monkeypatch.delenv("CEB_SIGNING_PRIVATE_KEY", raising=False)
+    result = _diag_track_a(tmp_path, monkeypatch, official_pack,
+                           official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+                           allow_unsigned=True)
+    assert result["verified"] is False
+    assert result["verification_grade"] == "diagnostic-unsigned"
+    assert result["public_official_eligible"] is False
+    assert "Ed25519" in result["diagnostic_reason"] \
+        or "signing" in result["diagnostic_reason"]
 
 
 def test_official_eval_refuses_when_public_artifact_would_leak(tmp_path,
@@ -929,6 +971,49 @@ def test_result_bundle_includes_release_manifest_and_fingerprint(tmp_path):
     assert "release_manifest.json" in names
     assert "ed25519:cafe" in verify
     assert not any("scan_report.json" in n for n in names)
+
+
+def test_result_bundle_includes_signed_release_manifest(tmp_path, official_pack):
+    # Item 3: when a SIGNED release manifest is provided, the bundle carries it
+    # verbatim (signature block intact) and VERIFY.txt documents verifying it.
+    import zipfile
+    from ceb.hosted.result_bundle import export_result_bundle
+    from ceb.hosted.release_manifest import (
+        build_release_manifest, sign_release_manifest, verify_release_manifest)
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    from ceb.hosted.signing import (
+        generate_keypair, load_public_key)
+
+    generate_keypair(tmp_path / "p.pem", tmp_path / "pub.pem")
+    m = build_release_manifest(
+        track="A", eval_pack_dir=str(official_pack),
+        public_key_path=str(tmp_path / "pub.pem"),
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+        root=REPO_ROOT)
+    sign_release_manifest(m, private_key_path=str(tmp_path / "p.pem"))
+    rel = tmp_path / "release.json"
+    rel.write_text(json.dumps(m))
+
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    _register_result_with_artifacts(
+        db_path, "run", job_id=3, mode="final_production", score=700.0,
+        verified=True, profile="final-production", grade="verified-final-production",
+        public_names=("official_result.json", "feedback.json"))
+    conn = hosted_db.connect(db_path)
+    try:
+        out, _ = export_result_bundle(conn, "run", tmp_path / "b.zip",
+                                      db_path=db_path, release_manifest_path=str(rel))
+    finally:
+        conn.close()
+    with zipfile.ZipFile(out) as zf:
+        bundled = json.loads(zf.read("release_manifest.json"))
+        verify_txt = zf.read("VERIFY.txt").decode()
+    assert bundled["signature"]["algorithm"] == "ed25519"
+    # The bundled manifest is authentic against the operator public key.
+    verdict = verify_release_manifest(
+        bundled, public_key=load_public_key(tmp_path / "pub.pem"))
+    assert verdict["authentic"] is True
+    assert "release-manifest verify" in verify_txt
 
 
 def test_malformed_key_on_smoke_path_degrades_to_unsigned(tmp_path, monkeypatch):

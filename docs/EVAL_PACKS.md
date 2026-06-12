@@ -68,9 +68,12 @@ v0.3.3부터 공개 공식 verified 결과는 팩의 내용 해시(`hash_directo
 verified 결과 메타데이터에 기록되는 신뢰 필드: `eval_pack_id`, `eval_pack_hash`,
 `eval_pack_manifest_hash`, `eval_pack_trusted: true`, `eval_pack_track`,
 `eval_pack_season`. 팩 해시는 `ceb hosted readiness check --eval-pack <dir>`로
-확인할 수 있다. strict readiness(`ceb hosted readiness check
---strict-public-official`)에서는 trusted+PINNED 공식 팩 앵커가 경고가 아니라
-**필수(blocking)** 검사다.
+확인할 수 있다. 공식 선언 게이트는 전용 명령
+`ceb hosted readiness declare`(또는 `ceb hosted readiness check
+--strict-public-official`)이며, 여기서는 trusted+PINNED 공식 팩 앵커가 경고가
+아니라 **필수(blocking)** 검사다. `readiness declare`는 `declaration_certificate`
+(스키마 `ceb.hosted.declaration_certificate/v1`)에 `official_eval_pack_hash`를
+기록하며, 이 해시는 서명된 릴리스 매니페스트에도 함께 들어간다.
 
 ## 공개 팩
 

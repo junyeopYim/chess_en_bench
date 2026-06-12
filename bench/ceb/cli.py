@@ -525,6 +525,7 @@ def cmd_hosted_readiness_check(args):
         track_b_baseline_hashes=args.track_b_baseline_hash,
         track_b_baseline_registry=args.track_b_baseline_registry,
         baseline_src=args.baseline_src,
+        track_b_baseline_engine=args.track_b_baseline_engine,
         require_server=args.require_server,
         strict_public_official=args.strict_public_official)
     if args.json:
@@ -541,9 +542,53 @@ def cmd_hosted_readiness_check(args):
     return 0 if report["ready"] else 2
 
 
+def cmd_hosted_readiness_declare(args):
+    from ceb.hosted.readiness import readiness_declare
+
+    report = readiness_declare(
+        db_path=args.db, eval_pack_dir=args.eval_pack,
+        public_key_path=args.public_key, track=args.track,
+        build_wrapper=args.build_wrapper, signing_key_path=args.signing_key,
+        official_pack_hashes=args.official_pack_hash,
+        official_pack_registry=args.official_pack_registry,
+        build_wrapper_hashes=args.build_wrapper_hash,
+        build_wrapper_registry=args.build_wrapper_registry,
+        track_b_baseline_hashes=args.track_b_baseline_hash,
+        track_b_baseline_registry=args.track_b_baseline_registry,
+        baseline_src=args.baseline_src,
+        track_b_baseline_engine=args.track_b_baseline_engine,
+        release_manifest=args.release_manifest,
+        require_server=args.require_server)
+    declared = report["public_official_declaration"] == "ready"
+    if args.json:
+        # JSON only, so the output is cleanly machine-parseable.
+        _print(json.dumps(report, indent=2))
+        return 0 if declared else 2
+    cert = report["declaration_certificate"]
+    _print("Public-official declaration — track %s: %s"
+           % (report["track"], "READY" if declared else "NOT READY"))
+    for c in report["checks"]:
+        mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
+        _print("  [%s] %-30s %s" % (mark, c["name"], c["detail"]))
+    if report["blocking_failures"]:
+        _print("blocking failures: %s" % ", ".join(report["blocking_failures"]))
+    _print("certificate:")
+    _print("  eval pack hash : %s" % cert["official_eval_pack_hash"])
+    _print("  operator key   : %s" % cert["operator_public_key_fingerprint"])
+    _print("  manifest hash  : %s" % cert["release_manifest_hash"])
+    if report["track"] in ("B", "BOTH"):
+        _print("  baseline hash  : %s" % cert["track_b_baseline_hash"])
+        _print("  wrapper hash   : %s" % cert["build_wrapper_hash"])
+    if not declared:
+        _print("NOT a public-official declaration: strict anchors are unmet. "
+               "Do not declare this deployment official.")
+    return 0 if declared else 2
+
+
 def cmd_hosted_release_manifest_create(args):
+    import os
     from ceb.hosted.release_manifest import (
-        build_release_manifest, ReleaseManifestError)
+        build_release_manifest, sign_release_manifest, ReleaseManifestError)
 
     try:
         manifest = build_release_manifest(
@@ -557,6 +602,11 @@ def cmd_hosted_release_manifest_create(args):
             build_wrapper_hashes=args.build_wrapper_hash,
             build_wrapper_registry=args.build_wrapper_registry,
             leaderboard_policy=args.leaderboard_policy)
+        # Sign directly when a private key is supplied (flag or env).
+        signed = False
+        if args.private_key or os.environ.get("CEB_SIGNING_PRIVATE_KEY"):
+            sign_release_manifest(manifest, private_key_path=args.private_key)
+            signed = True
     except ReleaseManifestError as exc:
         _print("release manifest failed: %s" % exc)
         return 2
@@ -566,6 +616,69 @@ def cmd_hosted_release_manifest_create(args):
         _print("wrote release manifest: %s" % args.out)
         _print("  pack hash : %s" % manifest["official_eval_pack_hash"])
         _print("  key id    : %s" % manifest["operator_public_key_fingerprint"])
+        _print("  signature : %s" % ("ed25519 (signed)" if signed
+                                     else "UNSIGNED (run release-manifest sign "
+                                          "or pass --private-key)"))
+    else:
+        _print(text)
+    return 0
+
+
+def cmd_hosted_release_manifest_sign(args):
+    from ceb.hosted.release_manifest import (
+        sign_release_manifest, ReleaseManifestError)
+
+    try:
+        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        sign_release_manifest(manifest, private_key_path=args.private_key)
+    except (OSError, ValueError) as exc:
+        _print("could not read release manifest: %s" % exc)
+        return 2
+    except ReleaseManifestError as exc:
+        _print("signing failed: %s" % exc)
+        return 2
+    Path(args.manifest).write_text(json.dumps(manifest, indent=2) + "\n",
+                                   encoding="utf-8")
+    _print("signed release manifest: %s" % args.manifest)
+    _print("  key id : %s" % manifest["signature"].get("key_id"))
+    return 0
+
+
+def cmd_hosted_release_manifest_verify(args):
+    from ceb.hosted.verifier import verify_release_manifest_file
+    from ceb.hosted.signing import load_public_key, SigningError
+
+    public_key = None
+    if args.public_key:
+        try:
+            public_key = load_public_key(args.public_key)
+        except SigningError as exc:
+            _print("could not load public key: %s" % exc)
+            return 2
+    verdict = verify_release_manifest_file(args.manifest, public_key=public_key)
+    _print(json.dumps(verdict, indent=2))
+    if not verdict["authentic"] and \
+            verdict.get("signature_trust") == "embedded-self-described":
+        _print("  (signature checks out against the manifest's OWN embedded key "
+               "only — pass --public-key <operator.pem> obtained out-of-band for "
+               "a real verdict.)")
+    return 0 if verdict["authentic"] else 2
+
+
+def cmd_hosted_release_checklist_create(args):
+    from ceb.hosted.release_checklist import (
+        build_release_checklist, ReleaseChecklistError)
+
+    try:
+        text = build_release_checklist(
+            track=args.track, readiness_report=args.readiness_report,
+            release_manifest=args.release_manifest)
+    except ReleaseChecklistError as exc:
+        _print("release checklist failed: %s" % exc)
+        return 2
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        _print("wrote public-official checklist: %s" % args.out)
     else:
         _print(text)
     return 0
@@ -653,6 +766,14 @@ def cmd_hosted_result_show(args):
         except (OSError, ValueError):
             _print("  (result file unavailable)")
             continue
+        # Make a diagnostic result impossible to mistake for a verified one.
+        grade = result.get("verification_grade") or row.get("verification_grade")
+        if not result.get("public_official_eligible",
+                          bool(result.get("verified")) and bool(grade)
+                          and str(grade).startswith("verified-")):
+            reason = result.get("diagnostic_reason")
+            _print("  *** DIAGNOSTIC — NOT PUBLIC OFFICIAL%s ***"
+                   % (": " + reason if reason else ""))
         sig = result.get("signature", {})
         _print("  signature : %s (%s)" % (sig.get("status"), sig.get("algorithm")))
         metadata = result.get("metadata", {})
@@ -1032,13 +1153,42 @@ def build_parser():
     p.add_argument("--track-b-baseline-registry", default=None)
     p.add_argument("--baseline-src", default=None,
                    help="Track B baseline tree to check for pinned-Stockfish trust")
+    p.add_argument("--track-b-baseline-engine", default=None,
+                   help="bench-capable baseline engine (built pinned Stockfish); "
+                        "strict Track B proves `bench` capability against it")
     p.add_argument("--strict-public-official", action="store_true",
                    help="treat pinning / public key / keypair-match / baseline / "
-                        "wrapper-hash anchors as BLOCKING (the final gate)")
+                        "wrapper-hash / bench-capability anchors as BLOCKING "
+                        "(the final gate)")
     p.add_argument("--require-server", action="store_true",
                    help="also require the hosted API admin token (server mode)")
     p.add_argument("--json", action="store_true", help="also print JSON report")
     p.set_defaults(func=cmd_hosted_readiness_check)
+    # The dedicated public-official declaration gate: ALWAYS strict.
+    p = readiness_sub.add_parser(
+        "declare", help="strict public-official declaration (the official gate)")
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--eval-pack", default=None)
+    p.add_argument("--public-key", default=None)
+    p.add_argument("--signing-key", default=None)
+    p.add_argument("--track", default="A")
+    p.add_argument("--build-wrapper", default=None)
+    p.add_argument("--official-pack-hash", action="append", default=None)
+    p.add_argument("--official-pack-registry", default=None)
+    p.add_argument("--build-wrapper-hash", action="append", default=None)
+    p.add_argument("--build-wrapper-registry", default=None)
+    p.add_argument("--track-b-baseline-hash", action="append", default=None)
+    p.add_argument("--track-b-baseline-registry", default=None)
+    p.add_argument("--baseline-src", default=None)
+    p.add_argument("--track-b-baseline-engine", default=None,
+                   help="bench-capable baseline engine (built pinned Stockfish)")
+    p.add_argument("--release-manifest", default=None,
+                   help="public release manifest to fingerprint into the "
+                        "declaration certificate")
+    p.add_argument("--require-server", action="store_true")
+    p.add_argument("--json", action="store_true",
+                   help="emit the JSON declaration report (JSON only)")
+    p.set_defaults(func=cmd_hosted_readiness_declare)
     rel = hosted_sub.add_parser("release-manifest",
                                 help="public release manifest for a season")
     rel_sub = rel.add_subparsers(dest="subsubcommand", required=True)
@@ -1055,8 +1205,35 @@ def build_parser():
     p.add_argument("--build-wrapper-hash", action="append", default=None)
     p.add_argument("--build-wrapper-registry", default=None)
     p.add_argument("--leaderboard-policy", default=None)
+    p.add_argument("--private-key", default=None,
+                   help="Ed25519 private key PEM; signs the manifest directly "
+                        "(else CEB_SIGNING_PRIVATE_KEY; unsigned if neither)")
     p.add_argument("--out", default=None, help="output JSON path (else stdout)")
     p.set_defaults(func=cmd_hosted_release_manifest_create)
+    p = rel_sub.add_parser("sign", help="Ed25519-sign an existing release manifest")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--private-key", default=None,
+                   help="Ed25519 private key PEM (else CEB_SIGNING_PRIVATE_KEY)")
+    p.set_defaults(func=cmd_hosted_release_manifest_sign)
+    p = rel_sub.add_parser("verify", help="verify a signed release manifest")
+    p.add_argument("--manifest", required=True)
+    p.add_argument("--public-key", default=None,
+                   help="operator Ed25519 public key PEM (out-of-band) for an "
+                        "authentic verdict")
+    p.set_defaults(func=cmd_hosted_release_manifest_verify)
+    checklist = hosted_sub.add_parser(
+        "release-checklist", help="public-official release checklist artifact")
+    checklist_sub = checklist.add_subparsers(dest="subsubcommand", required=True)
+    p = checklist_sub.add_parser(
+        "create", help="render a commit-safe PUBLIC_OFFICIAL_CHECKLIST.md")
+    p.add_argument("--track", default="A")
+    p.add_argument("--readiness-report", default=None,
+                   help="readiness/declare JSON report (readiness declare --json)")
+    p.add_argument("--release-manifest", default=None,
+                   help="public release manifest JSON")
+    p.add_argument("--out", default=None,
+                   help="output Markdown path (else stdout)")
+    p.set_defaults(func=cmd_hosted_release_checklist_create)
     p = hosted_sub.add_parser("keygen", help="generate an Ed25519 signing keypair")
     p.add_argument("--private-key", required=True, help="output private key path")
     p.add_argument("--public-key", required=True, help="output public key path")

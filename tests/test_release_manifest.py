@@ -108,4 +108,146 @@ def test_release_manifest_track_b_has_bench_policy_and_trust_mode(tmp_path,
         build_wrapper_hashes=["sha256:" + "2" * 64], root=REPO_ROOT)
     assert m["track_b_baseline_trust_mode"] == "hash"
     assert m["bench_policy"]["override_downgrades_to_diagnostic"] is True
+    assert m["bench_policy"]["supported_required_for_verified"] is True
     assert m["official_eval_pack_manifest_hash"].startswith("sha256:")
+
+
+# ----- v0.3.5: signed release manifests (req 3) -------------------------------
+
+def _manifest(tmp_path, official_pack):
+    pub = _pub(tmp_path)
+    return build_release_manifest(
+        track="A", eval_pack_dir=str(official_pack), public_key_path=pub,
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+        root=REPO_ROOT), pub
+
+
+def test_signed_manifest_verifies_with_matching_public_key(tmp_path, official_pack):
+    from ceb.hosted.release_manifest import (
+        sign_release_manifest, verify_release_manifest)
+    from ceb.hosted.signing import load_public_key
+    m, pub = _manifest(tmp_path, official_pack)
+    sign_release_manifest(m, private_key_path=str(tmp_path / "priv.pem"))
+    assert m["signature"]["algorithm"] == "ed25519"
+    # Authentic only against the out-of-band public key.
+    verdict = verify_release_manifest(m, public_key=load_public_key(pub))
+    assert verdict["signed"] is True and verdict["authentic"] is True
+    assert verdict["signature_trust"] == "supplied-public-key"
+    # Embedded-only verification proves consistency, NOT authenticity.
+    embedded = verify_release_manifest(m)
+    assert embedded["signature_ok"] is True and embedded["authentic"] is False
+
+
+def test_modified_signed_manifest_fails_verification(tmp_path, official_pack):
+    from ceb.hosted.release_manifest import (
+        sign_release_manifest, verify_release_manifest)
+    from ceb.hosted.signing import load_public_key
+    m, pub = _manifest(tmp_path, official_pack)
+    sign_release_manifest(m, private_key_path=str(tmp_path / "priv.pem"))
+    m["official_eval_pack_hash"] = "sha256:" + "0" * 64   # tamper
+    verdict = verify_release_manifest(m, public_key=load_public_key(pub))
+    assert verdict["signature_ok"] is False and verdict["authentic"] is False
+
+
+def test_unsigned_manifest_readable_but_not_authentic(tmp_path, official_pack):
+    from ceb.hosted.release_manifest import verify_release_manifest
+    m, _ = _manifest(tmp_path, official_pack)
+    verdict = verify_release_manifest(m)   # never signed
+    assert verdict["signed"] is False and verdict["authentic"] is False
+    assert m["official_eval_pack_hash"]    # still fully readable
+
+
+def test_release_manifest_create_signs_with_private_key(tmp_path, official_pack):
+    from ceb.cli import main
+    from ceb.hosted.verifier import verify_release_manifest_file
+    from ceb.hosted.signing import load_public_key, generate_keypair
+    generate_keypair(tmp_path / "p.pem", tmp_path / "pub.pem")
+    out = tmp_path / "rel.json"
+    rc = main(["hosted", "release-manifest", "create", "--track", "A",
+               "--eval-pack", str(official_pack), "--public-key",
+               str(tmp_path / "pub.pem"),
+               "--official-pack-hash", compute_eval_pack_hash(official_pack),
+               "--private-key", str(tmp_path / "p.pem"), "--out", str(out)])
+    assert rc == 0
+    m = json.loads(out.read_text())
+    assert m["signature"]["algorithm"] == "ed25519"
+    verdict = verify_release_manifest_file(
+        out, public_key=load_public_key(tmp_path / "pub.pem"))
+    assert verdict["authentic"] is True
+
+
+def test_release_manifest_sign_verify_cli_roundtrip(tmp_path, official_pack, capsys):
+    from ceb.cli import main
+    from ceb.hosted.signing import generate_keypair
+    generate_keypair(tmp_path / "p.pem", tmp_path / "pub.pem")
+    out = tmp_path / "rel.json"
+    # Create unsigned, then sign, then verify (exit 0 only with the public key).
+    main(["hosted", "release-manifest", "create", "--track", "A",
+          "--eval-pack", str(official_pack), "--public-key", str(tmp_path / "pub.pem"),
+          "--official-pack-hash", compute_eval_pack_hash(official_pack),
+          "--out", str(out)])
+    assert "signature" not in json.loads(out.read_text())
+    assert main(["hosted", "release-manifest", "sign", "--manifest", str(out),
+                 "--private-key", str(tmp_path / "p.pem")]) == 0
+    # Without the public key: not authentic (exit 2). With it: authentic (exit 0).
+    assert main(["hosted", "release-manifest", "verify", "--manifest", str(out)]) == 2
+    assert main(["hosted", "release-manifest", "verify", "--manifest", str(out),
+                 "--public-key", str(tmp_path / "pub.pem")]) == 0
+
+
+# ----- v0.3.5: public-official release checklist (req 4) ----------------------
+
+def test_release_checklist_renders_commit_safe_markdown(tmp_path, official_pack):
+    from ceb.hosted.release_checklist import build_release_checklist
+    from ceb.hosted.readiness import readiness_declare
+    from ceb.hosted.signing import generate_keypair
+    import ceb.jail.docker_engine as de
+    import ceb.hosted.readiness as rmod
+    from ceb.hosted import db as hosted_db
+
+    generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
+    # A signed manifest + a ready declaration report.
+    pub = _pub(tmp_path)
+    rel = build_release_manifest(
+        track="A", eval_pack_dir=str(official_pack), public_key_path=pub,
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)], root=REPO_ROOT)
+    rel_path = tmp_path / "release.json"
+    rel_path.write_text(json.dumps(rel))
+
+    import unittest.mock as mock
+    with mock.patch.object(de, "docker_available", lambda: True), \
+         mock.patch.object(rmod, "_image_present", lambda image: True):
+        report = readiness_declare(
+            db_path=str(hosted_db.init_db(tmp_path / "h.sqlite")),
+            eval_pack_dir=str(official_pack),
+            public_key_path=str(tmp_path / "pub.pem"),
+            signing_key_path=str(tmp_path / "priv.pem"), track="A",
+            official_pack_hashes=[compute_eval_pack_hash(official_pack)],
+            release_manifest=str(rel_path))
+    report_path = tmp_path / "readiness.json"
+    report_path.write_text(json.dumps(report))
+
+    text = build_release_checklist(
+        track="A", readiness_report=str(report_path),
+        release_manifest=str(rel_path))
+    assert "public-official release checklist" in text
+    assert rel["official_eval_pack_hash"] in text
+    assert rel["operator_public_key_fingerprint"] in text
+    assert "Do NOT declare" in text
+    assert "ready" in text
+    # Commit-safe: no key material or private key paths.
+    assert "BEGIN" not in text and "PRIVATE" not in text and "priv.pem" not in text
+
+
+def test_release_checklist_cli_writes_file(tmp_path, official_pack):
+    from ceb.cli import main
+    pub = _pub(tmp_path)
+    rel = build_release_manifest(
+        track="A", eval_pack_dir=str(official_pack), public_key_path=pub,
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)], root=REPO_ROOT)
+    rel_path = tmp_path / "release.json"; rel_path.write_text(json.dumps(rel))
+    out = tmp_path / "CHECKLIST.md"
+    rc = main(["hosted", "release-checklist", "create", "--track", "A",
+               "--release-manifest", str(rel_path), "--out", str(out)])
+    assert rc == 0 and out.is_file()
+    assert "release checklist" in out.read_text()

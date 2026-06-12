@@ -76,7 +76,9 @@ Track A 라운드는 세 가지 모드 중 하나로 실행된다(`tracks/a_from
 `official_round`/`final_eval` → 공개/비공개 아티팩트 → 메타데이터 + 서명 순으로 실행하며,
 비공개 평가 팩이 없거나, 스캔이 실패하거나, 엄격 게이트가 실패하면 **검증을 거부한다**. 로컬
 `ceb round run` 결과와 직접 실행한 `ceb track-b` 실행은 항상 `verified: false`(자가 보고
-진단)다. 검증 전용 호스팅형 리더보드와 공개 API 표면이 이 구분을 강제한다.
+진단)다. 검증 전용 호스팅형 리더보드와 공개 API 표면이 이 구분을 강제한다. 배포가 공식으로
+선언되는 유일한 게이트는 `ceb hosted readiness declare`다(또는
+`ceb hosted readiness check --strict-public-official`).
 [리더보드 거버넌스](LEADERBOARD_GOVERNANCE.md)를 참조한다.
 
 ## 설계 원칙
@@ -159,7 +161,7 @@ Track A 라운드는 세 가지 모드 중 하나로 실행된다(`tracks/a_from
 | `infra/docker/` | `engine_jail.Dockerfile`(감옥 이미지, 태그 `chess-en-bench-jail:0.4`)와 `evaluator.Dockerfile`(레거시 샌드박스 이미지) |
 | `.github/workflows/ci.yml` | Python 3.10–3.12에서의 CI: pytest, doctor, gate, quick-round 스모크, scan, 호스팅형 SQLite 스모크, Track B 토이 라운드(Stockfish, Docker, 클라우드 없음) |
 | `web/static/` | `ceb server start`가 제공하는 대시보드 프런트엔드 |
-| `tests/` | pytest 스위트(289 passed + 6 skipped; Docker 통합 테스트는 `CEB_DOCKER_TESTS=1`로 opt-in) |
+| `tests/` | pytest 스위트(311 passed + 6 skipped; 317 with `CEB_DOCKER_TESTS=1`; Docker 통합 테스트는 `CEB_DOCKER_TESTS=1`로 opt-in) |
 | `runs/` | 실행 아티팩트: `runs/<run_id>/...`, 임시 게이트 보고서는 `runs/_gate/`, 호스팅형 DB + `<db>_store/` |
 | `artifacts/` | 기타 빌드/평가 아티팩트 |
 

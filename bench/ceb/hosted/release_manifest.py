@@ -15,6 +15,7 @@ from ceb.hosted.metadata import git_commit, image_digest
 from ceb.sanitize import SanitizedError
 
 SCHEMA = "ceb.release_manifest/v1"
+VERIFICATION_SCHEMA = "ceb.release_manifest.verification/v1"
 
 DEFAULT_LIMITATIONS = [
     "single-node hosted backend (SQLite + local filesystem); not a distributed "
@@ -139,7 +140,79 @@ def build_release_manifest(*, track, eval_pack_dir, public_key_path,
         manifest["bench_policy"] = {
             "min_nps_ratio": DEFAULT_MIN_NPS_RATIO,
             "enforced_when_baseline_supports_bench": True,
+            "supported_required_for_verified": True,
             "override_downgrades_to_diagnostic": True,
         }
 
     return manifest
+
+
+# ----- signing / verification (v0.3.5, req 3) ---------------------------------
+# A release manifest is public, secret-free, and DISTRIBUTED, so it should be
+# signed with the operator's Ed25519 key. Verification is authentic only against
+# an out-of-band public key — an embedded/self-described key proves internal
+# consistency, not authenticity. The signature covers the canonical manifest
+# minus its own `signature` block (same scheme as official results).
+
+
+def sign_release_manifest(manifest, *, private_key_path=None, environ=None):
+    """Attach an Ed25519 signature block to a release manifest (in place).
+
+    Raises ReleaseManifestError when no Ed25519 private key is configured (HMAC
+    is NOT accepted: a public manifest must carry a public-verifiable signature)."""
+    from ceb.hosted.signing import (
+        ed25519_private_key_path, load_private_key, sign_result_ed25519,
+        SigningError)
+    path = ed25519_private_key_path(environ=environ, explicit_path=private_key_path)
+    if not path:
+        raise ReleaseManifestError(
+            "release manifest signing requires an Ed25519 private key "
+            "(--private-key or CEB_SIGNING_PRIVATE_KEY)")
+    try:
+        sign_result_ed25519(manifest, load_private_key(path))
+    except (SigningError, OSError, ValueError, TypeError) as exc:
+        raise ReleaseManifestError("could not sign release manifest",
+                                   "manifest signing error: %s" % exc)
+    return manifest
+
+
+def verify_release_manifest(manifest, *, public_key=None):
+    """Verify a release manifest's signature. Returns a verdict dict.
+
+    `authentic` is true only when the signature checks out against an OUT-OF-BAND
+    public key. An unsigned manifest is readable but never authentic; an Ed25519
+    manifest verified only against its embedded key is internally consistent but
+    not authentic."""
+    from ceb.hosted.signing import ALGORITHM_ED25519, verify_result_ed25519
+    signature = manifest.get("signature") or {}
+    algorithm = signature.get("algorithm")
+    if signature.get("status") != "signed":
+        return {"schema": VERIFICATION_SCHEMA, "signed": False,
+                "signature_ok": False, "authentic": False,
+                "signature_trust": "none",
+                "signature_algorithm": algorithm,
+                "operator_public_key_fingerprint": None,
+                "detail": "release manifest is unsigned (readable, but NOT "
+                          "authentic)"}
+    if algorithm != ALGORITHM_ED25519:
+        return {"schema": VERIFICATION_SCHEMA, "signed": True,
+                "signature_ok": False, "authentic": False,
+                "signature_trust": "none", "signature_algorithm": algorithm,
+                "operator_public_key_fingerprint": None,
+                "detail": "release manifest signature is %r, not Ed25519"
+                          % algorithm}
+    ok, detail = verify_result_ed25519(manifest, public_key=public_key)
+    trust = "supplied-public-key" if public_key is not None \
+        else "embedded-self-described"
+    return {
+        "schema": VERIFICATION_SCHEMA,
+        "signed": True,
+        "signature_ok": ok,
+        # Authentic requires BOTH a valid signature AND a trusted out-of-band key.
+        "authentic": bool(ok and public_key is not None),
+        "signature_trust": trust,
+        "signature_algorithm": algorithm,
+        "operator_public_key_fingerprint": (
+            signature.get("public_key_fingerprint") or signature.get("key_id")),
+        "detail": detail,
+    }

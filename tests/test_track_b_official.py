@@ -191,6 +191,8 @@ def test_hosted_track_b_dev_unjailed_is_diagnostic(tmp_path):
         max_plies=20, root=REPO_ROOT)
     assert report["verified"] is False
     assert report["verification_grade"] == "diagnostic-unjailed"
+    assert report["public_official_eligible"] is False
+    assert "jail" in report["diagnostic_reason"]
     assert report["score"]["delta_elo"] is not None
     assert result_path.is_file()
 
@@ -237,6 +239,10 @@ def test_hosted_track_b_verified_in_jail(tmp_path):
     tb = report["metadata"]["track_b"]
     assert tb["baseline_trusted"] is True and tb["baseline_trust_mode"] == "hash"
     assert tb["build_wrapper_trusted"] is True
+    # v0.3.5: a verified Track B result REQUIRES bench to be supported + passing.
+    assert tb["bench_required"] is True
+    assert tb["bench_supported"] is True and tb["bench_passed"] is True
+    assert report["public_official_eligible"] is True
     assert Path(result_path).is_file()
 
     db = hosted_db.init_db(tmp_path / "h.sqlite")
@@ -539,6 +545,82 @@ def test_bench_failure_with_override_is_diagnostic(tmp_path, monkeypatch):
         allow_no_bench=True)
     assert report["verified"] is False          # override NEVER keeps verified
     assert report["verification_grade"] == "diagnostic-no-bench"
+
+
+# ----- v0.3.5: verified Track B requires a bench-capable baseline -------------
+
+def test_verified_bench_unsupported_without_override_fails(tmp_path, monkeypatch):
+    # Baseline (and candidate) do not support `bench` -> a verified result must
+    # FAIL (no silent "unsupported" pass), unless --dev-allow-no-bench is set.
+    from ceb.hosted.build_wrappers import write_demo_wrapper
+    op = _stub_build_and_match(monkeypatch, tmp_path)  # eng = non-bench /bin/sh
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    wrapper = write_demo_wrapper(tmp_path / "w.sh")
+    with pytest.raises(TrackBPipelineError, match="bench-capable baseline"):
+        run_official_track_b(
+            candidate_src=cand, baseline_src=base, verified=True,
+            build_isolation="jail", build_wrapper=str(wrapper),
+            eval_pack_dir=str(TINY_PACK), run_id="x", runs_root=tmp_path / "runs",
+            root=REPO_ROOT, games=2, verification_grade="verified-official",
+            engine_jail="none", allow_no_bench=False)
+
+
+def test_verified_bench_unsupported_with_override_is_diagnostic(tmp_path,
+                                                                monkeypatch):
+    from ceb.hosted.build_wrappers import write_demo_wrapper
+    op = _stub_build_and_match(monkeypatch, tmp_path)
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    wrapper = write_demo_wrapper(tmp_path / "w.sh")
+    report = run_official_track_b(
+        candidate_src=cand, baseline_src=base, verified=True,
+        build_isolation="jail", build_wrapper=str(wrapper),
+        eval_pack_dir=str(TINY_PACK), run_id="x", runs_root=tmp_path / "runs",
+        root=REPO_ROOT, games=2, verification_grade="verified-official",
+        engine_jail="none", allow_no_bench=True)
+    assert report["verified"] is False
+    assert report["verification_grade"] == "diagnostic-no-bench"
+    assert report["public_official_eligible"] is False
+    assert report["diagnostic_reason"]
+    tb = report["metadata"]["track_b"]
+    assert tb["bench_required"] is True and tb["bench_supported"] is False
+
+
+def test_verified_bench_no_host_fallback_when_jail_cmd_fails(tmp_path, monkeypatch):
+    # If the candidate is supposed to be jailed for bench and jail command
+    # construction fails, the verified path must NEVER bench it on the host.
+    import ceb.jail as jail
+    from ceb.hosted.build_wrappers import write_demo_wrapper
+    op = _stub_build_and_match(monkeypatch, tmp_path)
+
+    def _boom(*a, **k):
+        raise jail.EngineJailError("no jail")
+
+    monkeypatch.setattr(jail, "engine_command", _boom)
+    base = tmp_path / "baseline"; cand = tmp_path / "candidate"
+    _fake_tree(base, 1); _fake_tree(cand, 2)
+    wrapper = write_demo_wrapper(tmp_path / "w.sh")
+    with pytest.raises(TrackBPipelineError, match="engine jail"):
+        run_official_track_b(
+            candidate_src=cand, baseline_src=base, verified=True,
+            build_isolation="jail", build_wrapper=str(wrapper),
+            eval_pack_dir=str(TINY_PACK), run_id="x", runs_root=tmp_path / "runs",
+            root=REPO_ROOT, games=2, verification_grade="verified-official",
+            engine_jail="docker", allow_no_bench=False)
+
+
+def test_diagnostic_cli_run_has_public_official_eligible_false(tmp_path):
+    # A plain CLI/direct (diagnostic) run is labelled not public-official.
+    baseline = tmp_path / "baseline"; candidate = tmp_path / "candidate"
+    _fake_tree(baseline, 1); _fake_tree(candidate, 2)
+    report = run_official_track_b(
+        candidate_src=candidate, baseline_src=baseline, games=2, movetime_ms=30,
+        max_plies=20, run_id="tb_diag", runs_root=tmp_path / "runs",
+        root=REPO_ROOT)
+    assert report["verified"] is False
+    assert report["public_official_eligible"] is False
+    assert report["diagnostic_reason"]
 
 
 def _git_init_commit(tree):

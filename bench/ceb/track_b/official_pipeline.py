@@ -67,8 +67,14 @@ def _build_tree_host(tree, build_script, engine_relpath, timeout_s=1800):
     return engine
 
 
-def _run_bench(baseline_engine, candidate_engine, engine_jail, min_nps_ratio):
-    """Bench both engines; the candidate is jailed when jailing is on."""
+def _run_bench(baseline_engine, candidate_engine, engine_jail, min_nps_ratio,
+               *, require_candidate_jail=False):
+    """Bench both engines; the candidate is jailed when jailing is on.
+
+    For the VERIFIED path (require_candidate_jail=True with engine_jail="docker")
+    there is NO host fallback: if jail command construction fails, the candidate
+    bench is refused rather than run unconfined on the host. The diagnostic path
+    keeps the best-effort fallback."""
     from ceb.track_b.bench_sanity import run_bench_sanity, DEFAULT_MIN_NPS_RATIO
     base_cmd = [str(baseline_engine)]
     cand_engine = Path(candidate_engine)
@@ -78,7 +84,12 @@ def _run_bench(baseline_engine, candidate_engine, engine_jail, min_nps_ratio):
         try:
             cand_cmd, _ = engine_command(cand_engine.parent, "docker",
                                          engine_name=cand_engine.name)
-        except EngineJailError:
+        except EngineJailError as exc:
+            if require_candidate_jail:
+                raise TrackBPipelineError(
+                    "verified Track B bench requires the candidate to run in "
+                    "the engine jail; refusing to bench it on the host",
+                    "engine jail command construction failed: %s" % exc)
             cand_cmd = [str(cand_engine)]
     try:
         return run_bench_sanity(
@@ -185,25 +196,43 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         candidate_engine = _build_tree_host(candidate_src, build_script, engine_relpath)
         build_output = None
 
-    # Bench / speed sanity (req 6): record node counts / NPS; enforce the
-    # NPS-ratio threshold only when both engines actually support `bench`
-    # (toy engines do not). The candidate is jailed for bench when jailing.
+    # Bench / speed sanity (req 6, hardened in v0.3.5): a VERIFIED Track B
+    # result REQUIRES bench to be SUPPORTED by the trusted baseline (and the
+    # candidate) and to PASS the NPS-ratio threshold. "Unsupported" is no longer
+    # a silent pass on the verified path — a verified result must be scored
+    # against a bench-capable baseline. The candidate is jailed for bench on the
+    # verified path with no host fallback. --dev-allow-no-bench ALWAYS downgrades
+    # to diagnostic-no-bench (verified=false), never preserves verification.
     progress("bench/speed sanity ...")
-    bench_report = _run_bench(baseline_engine, candidate_engine, engine_jail,
-                              bench_min_nps_ratio)
-    if verified and bench_report["supported"] and not bench_report["passed"]:
-        if allow_no_bench:
-            # The override NEVER preserves verified: it downgrades to a
-            # diagnostic so a failed bench can never reach the leaderboard.
-            from ceb.hosted.profiles import GRADE_DIAGNOSTIC_NO_BENCH
-            verified = False
-            verification_grade = GRADE_DIAGNOSTIC_NO_BENCH
-        else:
-            raise TrackBPipelineError(
-                "verified Track B failed bench/speed sanity: candidate NPS "
-                "ratio %.3f is below the threshold %.3f"
-                % (bench_report.get("nps_ratio") or 0.0,
-                   bench_report["min_nps_ratio"]))
+    bench_required = bool(verified)
+    bench_report = _run_bench(
+        baseline_engine, candidate_engine, engine_jail, bench_min_nps_ratio,
+        require_candidate_jail=bool(verified and engine_jail == "docker"))
+    if verified:
+        from ceb.hosted.profiles import GRADE_DIAGNOSTIC_NO_BENCH
+        if not bench_report["supported"]:
+            if allow_no_bench:
+                verified = False
+                verification_grade = GRADE_DIAGNOSTIC_NO_BENCH
+            else:
+                raise TrackBPipelineError(
+                    "verified Track B requires a bench-capable baseline: the "
+                    "trusted baseline did not report a `bench` NPS, so speed "
+                    "sanity cannot be enforced. Use a bench-capable pinned "
+                    "Stockfish baseline, or pass --dev-allow-no-bench for a "
+                    "diagnostic (unverified) result")
+        elif not bench_report["passed"]:
+            if allow_no_bench:
+                # The override NEVER preserves verified: it downgrades to a
+                # diagnostic so a failed bench can never reach the leaderboard.
+                verified = False
+                verification_grade = GRADE_DIAGNOSTIC_NO_BENCH
+            else:
+                raise TrackBPipelineError(
+                    "verified Track B failed bench/speed sanity: candidate NPS "
+                    "ratio %.3f is below the threshold %.3f"
+                    % (bench_report.get("nps_ratio") or 0.0,
+                       bench_report["min_nps_ratio"]))
 
     progress("running candidate-vs-baseline match ...")
     match_report, feedback = run_track_b_round(
@@ -231,6 +260,18 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         "build_jail_image_digest": (
             _build_jail_image_digest() if build_isolation == "jail" else None),
         "bench": bench_report,
+        # Stable, top-level speed-sanity fields (req 6, v0.3.5): a verified
+        # Track B result always has bench_required=true and bench_supported=true.
+        "bench_required": bench_required,
+        "bench_supported": bool(bench_report.get("supported")),
+        "bench_passed": bool(bench_report.get("passed")),
+        "nps_ratio": bench_report.get("nps_ratio"),
+        "min_nps_ratio": bench_report.get("min_nps_ratio"),
+        "bench_policy": {
+            "supported_required_for_verified": True,
+            "enforced_when_baseline_supports_bench": True,
+            "override_downgrades_to_diagnostic": True,
+        },
         # Baseline trust (req 3).
         "baseline_trusted": bool(baseline_trust
                                  and baseline_trust.get("baseline_trusted")),
@@ -264,6 +305,16 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         report["profile"] = profile
     if verification_grade is not None:
         report["verification_grade"] = verification_grade
+
+    # Make a diagnostic result impossible to confuse with a verified one (item 5):
+    # every unverified result carries public_official_eligible=false plus a reason.
+    from ceb.hosted.profiles import diagnostic_reason, is_public_official_eligible
+    report["public_official_eligible"] = is_public_official_eligible(
+        verified, verification_grade)
+    if not report["public_official_eligible"]:
+        report["diagnostic_reason"] = (
+            diagnostic_reason(verification_grade)
+            or "diagnostic Track B result (not public-official eligible)")
 
     sign_official_result(report, private_key_path=signing_key_path)
     if verified and report["signature"].get("algorithm") != ALGORITHM_ED25519:

@@ -3,6 +3,78 @@
 버전 번호는 패키지 버전이다(`pyproject.toml`, `bench/ceb/__init__.py`). 각 릴리스는
 이전 CLI 명령이 계속 동작하도록 유지한다.
 
+## v0.3.5 — 검증 경로 강화와 공개 공식 선언 자동화
+
+테마: verified Track B 경로에서 마지막 침묵 통과를 제거하고, 공개 공식 선언을 전용
+명령 + 서명된 매니페스트 + 커밋 안전 체크리스트로 정식화한다. dev 플래그 강등은 한눈에
+구분되도록 라벨링된다. "단일 노드(SQLite + 로컬 FS)"는 정직하게 유지한다. strict readiness는
+이제 버전 `>= 0.3.5`를 요구한다. 비도커 `pytest -q`는 311 passed / 6 skipped,
+Docker(`CEB_DOCKER_TESTS=1 pytest -q`)는 317 passed.
+
+- **bench는 지원되어야 verified, 호스트 폴백 없음(항목 1)**: verified Track B는 신뢰된
+  베이스라인과 후보 양쪽에서 bench/속도 sanity가 **지원(SUPPORTED)** 되어야 한다.
+  베이스라인이 bench NPS를 보고하지 못하면(unsupported) verified Track B는 **실패**한다
+  (옛 "unsupported = 침묵 통과"는 제거). `--dev-allow-no-bench`는 검증을 보존하지 않고
+  **항상** `diagnostic-no-bench`(`verified:false`)로 강등한다. 베이스라인은 bench하나 후보가
+  못하면 실패/강등하며 결코 verified가 되지 않는다. verified 경로에서 후보의 engine-jail
+  bench 명령 구성이 실패하면 후보 bench는 **거부**되며 호스트에서 실행되지 않는다(호스트
+  폴백 없음, 내부 `_run_bench(require_candidate_jail=...)`). 결과 `metadata["track_b"]`는
+  `bench_required`/`bench_supported`/`bench_passed`/`nps_ratio`/`min_nps_ratio`와
+  `bench_policy`(`supported_required_for_verified`/`enforced_when_baseline_supports_bench`/
+  `override_downgrades_to_diagnostic`) 및 전체 bench 보고서를 기록한다. strict Track B
+  readiness는 이제 bench 능력을 **증명**한다: `--track-b-baseline-engine <bench 가능 엔진>`을
+  넘기면 readiness가 그 엔진에 bench를 실행하고 새 차단성 검사 `track_b_bench_capability`가
+  NPS 보고를 확인한다. 없으면 strict Track B 선언은 **차단**된다(예제 `engine.py`는 이제
+  `bench` 명령에 응답해 테스트/스모크의 bench 가능 토이로 동작).
+- **전용 strict 선언 명령(항목 2)**: 새 `ceb hosted readiness declare`는 **항상** strict
+  공개 공식 정책으로 동작하며 `public_official_declaration == "ready"`일 때만 0으로 종료한다
+  (`--json`은 JSON만 출력). 최상위 `declaration_certificate`(스키마
+  `ceb.hosted.declaration_certificate/v1`)를 추가하며 `benchmark_version`/`track`/`ready`/
+  `public_official_declaration`/`release_manifest_hash`/`operator_public_key_fingerprint`/
+  `official_eval_pack_hash`/`track_b_baseline_hash`/`build_wrapper_hash`/`timestamp`/
+  `known_limitations`를 담는다. 비-strict `ceb hosted readiness check`는 진단용으로 남는다.
+  공식 선언 게이트는 오직 `readiness declare` 또는 `readiness check
+  --strict-public-official`이다. 플래그: `--db --eval-pack --public-key --signing-key
+  --track {A|B|BOTH} --build-wrapper --official-pack-hash --official-pack-registry
+  --build-wrapper-hash --build-wrapper-registry --track-b-baseline-hash
+  --track-b-baseline-registry --baseline-src --track-b-baseline-engine --release-manifest
+  --json`.
+- **서명·검증 가능한 릴리스 매니페스트(항목 3, Ed25519)**: `ceb hosted release-manifest
+  create ... [--private-key op.pem]`은 `--private-key` 또는 `CEB_SIGNING_PRIVATE_KEY`가
+  주어지면 직접 서명한다(없으면 UNSIGNED이되 읽기 가능). `ceb hosted release-manifest sign
+  --manifest release.json --private-key op.pem`과 `ceb hosted release-manifest verify
+  --manifest release.json --public-key op.pub.pem`을 추가한다. 매니페스트는 Ed25519 서명
+  블록을 갖는다(서명은 서명 블록을 제외한 정규 매니페스트를 덮으며, 공식 결과와 동일 방식).
+  `authentic:true`는 **대역 외(out-of-band)** 공개키에 대해서만 성립한다 — 미서명 매니페스트는
+  읽을 수 있어도 결코 authentic이 아니고, 임베드 키 검증은 자기일관성만 증명한다.
+  `GET /api/hosted/release-manifest`는 `CEB_RELEASE_MANIFEST`의 (서명된) JSON을 제공한다.
+  결과 번들은 서명된 매니페스트를 포함하며 `VERIFY.txt`는 `ceb hosted release-manifest verify
+  --manifest release_manifest.json --public-key <operator.pem>`을 문서화한다.
+- **공개 공식 릴리스 체크리스트 아티팩트(항목 4)**: `ceb hosted release-checklist create
+  --track {A|B|BOTH} --readiness-report readiness.json --release-manifest release.json
+  --out PUBLIC_OFFICIAL_CHECKLIST.md`. 커밋 안전 Markdown으로 해시/지문/정책만 담고
+  비밀·비공개 경로는 없다. 벤치마크 버전, git 커밋, readiness 선언 상태, 릴리스 매니페스트
+  해시, 공식 eval 팩 id/해시/시즌, 운영자 공개키 지문, Track B 베이스라인 신뢰 모드/해시,
+  빌드 래퍼 해시, 엔진/빌드 감옥 이미지 다이제스트, 리더보드 정책, 알려진 한계, 정확한
+  verify 명령, 그리고 "Do not declare official unless the readiness declaration is ready."
+  문구를 포함한다. 보안 장벽이 아니라 거버넌스이며 새 모듈
+  `bench/ceb/hosted/release_checklist.py`로 구현된다.
+- **dev 강등 플래그는 verified와 혼동 불가(항목 5)**: 모든 진단 결과(임의의 dev 플래그 강등)는
+  `verified:false`, `diagnostic-`로 시작하는 `verification_grade`, 평문 `diagnostic_reason`,
+  `public_official_eligible:false`를 갖는다. 호스트형 리더보드는 여전히 이를 무시하고(verified
+  전용), `ceb hosted result show`는 `*** DIAGNOSTIC — NOT PUBLIC OFFICIAL: <reason> ***`를
+  출력하며, 번들 내보내기는 기본적으로 진단 결과를 거부하고(선택된 최고 verified 결과만 번들),
+  `GET .../official-result`는 verified 결과만 반환한다. 대상 플래그: `--dev-allow-unjailed`,
+  `--dev-allow-demo-pack`, `--dev-allow-unpinned-pack`, `--dev-allow-unsigned`,
+  `--dev-allow-toy-baseline`, `--dev-allow-unpinned-wrapper`, `--dev-allow-no-bench`.
+- **공개 공식 스모크 레시피(항목 6)**: `scripts/public_official_smoke.sh [A|BOTH]`는 임시
+  디렉터리에 완전히 모킹된 공식 셋업(저장소 밖 공식 팩, Ed25519 키, Track B 베이스라인/후보
+  트리, 트리 밖의 신뢰된 래퍼, bench 가능 베이스라인 엔진, 핀된 해시, 임시 DB, 서명된 릴리스
+  매니페스트)을 만들고 `ceb hosted readiness declare`를 실행한다. Docker + 감옥 이미지가 있으면
+  READY에 도달하고, 없으면 감옥 앵커에서 올바르게 차단하며 완전한 verified e2e에는 Docker가
+  필요함을 알린다. 아티팩트를 커밋하지 않고 PASS/FAIL을 출력한다.
+- **문서(항목 7)**: 릴리스 노트와 호스트형/Track B 문서를 위 변경에 맞춰 v0.3.5로 갱신한다.
+
 ## v0.3.4 — 최종 공개 공식 감사 하드닝
 
 테마: 공개 공식 선언 직전의 잔여 모호성을 제거한다. 어떤 `--dev-*` 플래그도

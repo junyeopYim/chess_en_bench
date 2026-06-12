@@ -92,6 +92,51 @@ class ProfileError(ValueError):
     pass
 
 
+# ----- diagnostic labelling (every dev-flag downgrade carries a reason) --------
+# A diagnostic result (verified=false, a diagnostic-* grade) must be impossible
+# to confuse with a verified public-official result. Each grade maps to a plain
+# reason; results also carry `public_official_eligible: false`.
+_DIAGNOSTIC_REASONS = {
+    GRADE_DIAGNOSTIC_SMOKE:
+        "smoke profile is diagnostic-only and can never be verified",
+    GRADE_DIAGNOSTIC_UNJAILED:
+        "ran without the docker engine jail (--dev-allow-unjailed)",
+    GRADE_DIAGNOSTIC_UNSIGNED:
+        "no Ed25519 signing key configured (--dev-allow-unsigned)",
+    GRADE_DIAGNOSTIC_UNTRUSTED_PACK:
+        "committed/demo eval pack, not an operator official pack "
+        "(--dev-allow-demo-pack)",
+    GRADE_DIAGNOSTIC_UNPINNED_PACK:
+        "official eval pack hash was not pinned to an allowlist "
+        "(--dev-allow-unpinned-pack)",
+    GRADE_DIAGNOSTIC_UNTRUSTED_BASELINE:
+        "untrusted Track B baseline (not a pinned Stockfish checkout nor "
+        "hash-allowlisted) (--dev-allow-toy-baseline)",
+    GRADE_DIAGNOSTIC_UNTRUSTED_WRAPPER:
+        "build wrapper hash was not pinned to an allowlist "
+        "(--dev-allow-unpinned-wrapper)",
+    GRADE_DIAGNOSTIC_NO_BENCH:
+        "bench/speed sanity was not satisfied (--dev-allow-no-bench)",
+}
+
+
+def diagnostic_reason(grade):
+    """A plain-language reason a result is diagnostic, by its grade. Returns a
+    generic reason for an unknown diagnostic-* grade, None for a verified grade."""
+    if grade in _DIAGNOSTIC_REASONS:
+        return _DIAGNOSTIC_REASONS[grade]
+    if isinstance(grade, str) and grade.startswith("diagnostic-"):
+        return "diagnostic result (not public-official eligible)"
+    return None
+
+
+def is_public_official_eligible(verified, grade):
+    """A result counts toward the public-official leaderboard only when it is
+    verified AND carries a verified-* grade. Any diagnostic-* grade is ineligible
+    no matter what the `verified` flag claims (defense in depth)."""
+    return bool(verified) and isinstance(grade, str) and grade.startswith("verified-")
+
+
 def get_profile(name):
     """Resolve a profile by name. Raises ProfileError for unknown names."""
     profile = PROFILES.get(name)

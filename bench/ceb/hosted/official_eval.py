@@ -242,6 +242,14 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
         "metadata": metadata,
         "verified": verified,
     }
+    # A diagnostic result (any dev-flag downgrade) must be impossible to confuse
+    # with a verified public-official result (item 5).
+    from ceb.hosted.profiles import diagnostic_reason, is_public_official_eligible
+    result["public_official_eligible"] = is_public_official_eligible(verified, grade)
+    if not result["public_official_eligible"]:
+        result["diagnostic_reason"] = (
+            diagnostic_reason(grade)
+            or "diagnostic result (not public-official eligible)")
     sign_official_result(result, private_key_path=signing_key_path)
     # Defense in depth: a verified result MUST be Ed25519-signed.
     if verified and result["signature"].get("algorithm") != ALGORITHM_ED25519:

@@ -115,7 +115,7 @@ POST/업로드 엔드포인트는 `CEB_ADMIN_TOKEN`이 설정되지 않으면 50
   (`bench/ceb/track_b/official_pipeline.py`, `GRADE_DIAGNOSTIC_NO_BENCH`) 검증된
   리더보드에는 결코 오르지 않는다.
 
-**어떤 `--dev-*` 플래그도 verified를 유지하지 못한다.** v0.3.4 감사로 마지막
+**어떤 `--dev-*` 플래그도 verified를 유지하지 못한다.** v0.3.5 감사로 마지막
 모호성이 제거되었다: 모든 개발 플래그는 검증 가능한 실행을 **실패**시키거나
 결과를 **진단(미검증) grade로 강등**시킨다 — 그 사이는 없다. `--dev-allow-unjailed`→
 `diagnostic-unjailed`, `--dev-allow-unsigned`→`diagnostic-unsigned`,
@@ -205,22 +205,41 @@ verified 결과는 `track_b_official` 모드로 final-tier에 들어간다.
   키로 `ceb hosted verify-result --public-key`로 독립 확인할 수 있다
   (`docs/RESULT_SIGNING.md` 참조).
 - **readiness 선언이 단일 게이트다 (req10).** 리포가 Track A·B의 "공개 공식 단일
-  노드 호스티드 벤치마크 준비 완료"인지는 오직 `ceb hosted readiness check
-  --strict-public-official` 통과로만 선언한다(`bench/ceb/hosted/readiness.py`, 스키마
-  `ceb.hosted.readiness/v2`, 버전 하한 0.3.4). 보고서는
+  노드 호스티드 벤치마크 준비 완료"인지는 오직 전용 선언 명령
+  `ceb hosted readiness declare`(또는 동치인 `ceb hosted readiness check
+  --strict-public-official`) 통과로만 선언한다(`bench/ceb/hosted/readiness.py`, 스키마
+  `ceb.hosted.readiness/v2`, 버전 하한 0.3.5). `readiness declare`는 **항상** 엄격
+  공개 공식 정책으로 돌며 `public_official_declaration == "ready"`일 때만 exit 0이고,
+  스키마 `ceb.hosted.declaration_certificate/v1`인 최상위 `declaration_certificate`
+  객체(벤치마크 버전, track, ready, 공개 공식 선언 상태, 릴리스 매니페스트 해시, 운영자
+  공개키 지문, 공식 eval 팩 해시, Track B 베이스라인 해시, 빌드 래퍼 해시, 타임스탬프,
+  알려진 한계)를 담는다. 비엄격 `ceb hosted readiness check`는 진단용으로 남는다.
+  공식 선언 게이트는 오직 `readiness declare` 또는 `readiness check
+  --strict-public-official` **둘뿐이다**. 보고서는
   `public_official_declaration`(`"ready"`/`"not-ready"`)과 실패한 필수 체크 목록
   `blocking_failures`를 담는다. `--track BOTH`는 Track A 팩 체크와 모든 Track B
   체크를 함께 돌리고, CLI `--json`은 깔끔한 기계 출력을 위해 **JSON만** 찍는다.
   엄격 Track A는 버전/db/docker/엔진 감옥 이미지/신뢰+핀 고정 팩/데모 팩 거부/Ed25519
   키/공개 키/키페어 일치/final-production 게임 하한을, 엄격 Track B는 추가로 빌드 감옥
   이미지/빌드 래퍼(존재+실행 가능+트리 밖+해시 핀)/베이스라인 신뢰(콘텐츠 해시 핀 또는
-  클린 stockfish-lock)/벤치 정책(우회 불가능: 실패하거나 `--dev-allow-no-bench`면
-  강등, 결코 verified 아님)/Track B API 엔드포인트 임포트 가능을 BLOCKING으로 요구한다.
+  클린 stockfish-lock)/벤치 능력 증명(`track_b_bench_capability`: 핀 고정한
+  `--track-b-baseline-engine`에 bench를 실제로 돌려 NPS 보고를 확인; 없으면 BLOCK)/벤치
+  정책(우회 불가능: 실패하거나 `--dev-allow-no-bench`면 강등, 결코 verified 아님)/Track B
+  API 엔드포인트 임포트 가능을 BLOCKING으로 요구한다. **readiness 선언이 ready가 아니면
+  공식으로 선언하지 않는다.**
 - **운영자 공개키 지문과 배포 경로를 게시한다 (req2).** 공개 리더보드는 운영자
   **공개키 지문**(`operator_public_key_fingerprint`)과 그 키의 배포 경로를 게시해,
   검증자가 별도로 공급할 공개 키의 출처를 알 수 있게 한다. 이 지문은 비밀 없는 릴리스
-  매니페스트(`ceb hosted release-manifest create`, 스키마 `ceb.release_manifest/v1`,
-  `bench/ceb/hosted/release_manifest.py`)에 실리며, **키 자체는 결코 게시하지 않는다**.
+  매니페스트(`ceb hosted release-manifest create [--private-key op.pem]`, 스키마
+  `ceb.release_manifest/v1`, `bench/ceb/hosted/release_manifest.py`)에 실리며, **키 자체는
+  결코 게시하지 않는다**. 공개 배포용 매니페스트는 **반드시 서명한다**: `--private-key`
+  (또는 `CEB_SIGNING_PRIVATE_KEY`)를 주면 생성 시 바로 Ed25519 서명 블록(공식 결과와
+  동일 스킴, 서명 블록을 뺀 정규 매니페스트를 커버)을 붙이고, 없으면 읽을 수는 있되
+  미서명으로 남는다. 사후 서명은 `ceb hosted release-manifest sign --manifest release.json
+  --private-key op.pem`, 검증은 `ceb hosted release-manifest verify --manifest release.json
+  --public-key op.pub.pem`이다. 진정성(`authentic: true`)은 오직 **별도 공급한 외부 공개
+  키**로만 성립한다 — 미서명 매니페스트는 읽을 수 있어도 결코 진정하지 않고, 임베디드
+  키로의 검증은 내부 정합성만 증명한다.
   `--strict-public-official` 엄격 readiness는 로드 가능한 Ed25519 비공개 키, 로드
   가능한 공개 키, 그리고 둘의 **키페어 일치**(비공개 키의 `public_key()` 지문이 공급된
   공개 키 지문과 동일)를 모두 BLOCKING 요구로 강제하며, 보고서에 공개키 지문을 담는다
@@ -239,9 +258,21 @@ verified 결과는 `track_b_official` 모드로 final-tier에 들어간다.
   상수 시간 토큰 비교(`hmac.compare_digest`)로 보호된다. 공개 결과 번들(`ceb hosted
   result export --release-manifest <path> --public-key <pem> | --public-key-fingerprint
   <fp>`, `bench/ceb/hosted/result_bundle.py`)은 선택된 검증 결과의 공개 아티팩트에
-  `release_manifest.json`과 공개키 지문을 함께 담고, `VERIFY.txt`에 별도 공급한 공개
-  키/매니페스트 지문으로 대조하는 절차를 적는다. 번들은 비선택 smoke/진단과 모든 비공개
-  아티팩트(스캔·누출 리포트, 매치 로그), 비공개 키, 숨은 팩 데이터를 결코 포함하지 않는다.
+  서명된 `release_manifest.json`과 공개키 지문을 함께 담고, `VERIFY.txt`에 별도 공급한
+  공개 키/매니페스트 지문으로 대조하는 절차(`ceb hosted release-manifest verify --manifest
+  release_manifest.json --public-key <operator.pem>` 포함)를 적는다. 번들은 비선택
+  smoke/진단(진단 결과는 기본으로 export 거부 — 선택된 **검증** 결과만 번들된다)과 모든
+  비공개 아티팩트(스캔·누출 리포트, 매치 로그), 비공개 키, 숨은 팩 데이터를 결코 포함하지
+  않는다.
+- **시즌은 커밋 안전한 공개 공식 체크리스트를 함께 게시한다.** `ceb hosted
+  release-checklist create --track {A|B|BOTH} --readiness-report readiness.json
+  --release-manifest release.json --out PUBLIC_OFFICIAL_CHECKLIST.md`
+  (`bench/ceb/hosted/release_checklist.py`)는 해시·지문·정책만 담는 커밋 안전 Markdown을
+  낸다 — **비밀·비공개 경로 없음**. 벤치마크 버전, git 커밋, readiness 선언 상태, 릴리스
+  매니페스트 해시, 공식 eval 팩 id/해시/시즌, 운영자 공개키 지문, Track B 베이스라인
+  신뢰 모드/해시, 빌드 래퍼 해시, 엔진/빌드 감옥 이미지 다이제스트, 리더보드 정책,
+  알려진 한계, 정확한 verify 명령들, 그리고 "**readiness 선언이 ready가 아니면 공식으로
+  선언하지 않는다**"는 문구를 담는다. 이는 거버넌스 문서이지 보안 장벽이 아니다.
 - **검증된 결과 전용이 공개용 기본값이다.** `ceb hosted leaderboard`와
   `GET /api/hosted/leaderboard`는 검증된 항목만 반환한다. 미검증 로컬
   보드는 순위 발행이 아니라 자가 점검을 위해 존재한다. 단일 노드(SQLite + 로컬 FS)는

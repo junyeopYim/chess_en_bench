@@ -2,7 +2,10 @@
 """Minimal self-contained UCI engine that passes the chess_en_bench public gate.
 
 It plays the first legal move in deterministic (UCI-string) order and
-supports the benchmark's `go perft <depth>` extension.
+supports the benchmark's `go perft <depth>` extension. It also answers the
+`bench` command with deterministic `Nodes searched` / `Nodes/second` lines (a
+fixed perft node count), so it can stand in as a bench-capable toy engine for
+the Track B speed-sanity path in tests and the public-official smoke recipe.
 
 This file is intentionally self-contained (no imports from the `ceb`
 package): official external submissions must run without the benchmark's
@@ -308,6 +311,13 @@ def main():
             print("readyok")
         elif cmd == "ucinewgame":
             pos = parse_fen(START_FEN)
+        elif cmd == "bench":
+            # Deterministic node count (perft from the start position). Both a
+            # baseline and a candidate built from this engine report the same
+            # value, so the candidate/baseline NPS ratio is ~1.0.
+            nodes = perft(parse_fen(START_FEN), 3)
+            print("Nodes searched  : %d" % nodes)
+            print("Nodes/second    : %d" % (nodes * 1000))
         elif cmd == "position":
             try:
                 pos = parse_position(tokens[1:])

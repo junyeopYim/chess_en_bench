@@ -5,12 +5,27 @@ public-official ready. With --strict-public-official the pinning / key-match /
 baseline / wrapper-hash anchors become BLOCKING (FAIL), not warnings.
 """
 
+import time
 from pathlib import Path
 
 from ceb import __version__, paths
 
 SCHEMA = "ceb.hosted.readiness/v2"
-_MIN_VERSION = (0, 3, 4)
+DECLARATION_SCHEMA = "ceb.hosted.declaration_certificate/v1"
+_MIN_VERSION = (0, 3, 5)
+
+DECLARATION_LIMITATIONS = [
+    "single-node hosted backend (SQLite + local filesystem); not a distributed "
+    "production service",
+    "verified end-to-end / build jail / bench require Docker; non-Docker runs "
+    "are diagnostic only",
+    "Track B verified results require a bench-capable pinned Stockfish baseline "
+    "and a trusted, hash-pinned build wrapper",
+    "fastchess is outside the verified path until PGN oracle post-validation "
+    "exists",
+    "real hidden eval packs, Ed25519 keys, and Stockfish source are operator "
+    "artifacts and are never committed",
+]
 
 
 def _version_tuple(text):
@@ -30,7 +45,8 @@ def readiness_check(*, db_path=None, eval_pack_dir=None, public_key_path=None,
                     official_pack_hashes=None, official_pack_registry=None,
                     build_wrapper_hashes=None, build_wrapper_registry=None,
                     track_b_baseline_hashes=None, track_b_baseline_registry=None,
-                    baseline_src=None, require_server=False,
+                    baseline_src=None, track_b_baseline_engine=None,
+                    require_server=False,
                     strict_public_official=False, root=None):
     """Return a readiness report dict with per-check results and `ready`."""
     if root is None:
@@ -96,7 +112,7 @@ def readiness_check(*, db_path=None, eval_pack_dir=None, public_key_path=None,
         checks.extend(_track_b_checks(
             build_wrapper, build_wrapper_hashes, build_wrapper_registry,
             track_b_baseline_hashes, track_b_baseline_registry, baseline_src,
-            root, strict))
+            track_b_baseline_engine, root, strict))
 
     if require_server:
         import os
@@ -115,6 +131,112 @@ def readiness_check(*, db_path=None, eval_pack_dir=None, public_key_path=None,
             "strict_public_official": strict, "ready": ready,
             "public_official_declaration": declaration,
             "blocking_failures": blocking, "checks": checks}
+
+
+# ----- strict public-official declaration (v0.3.5, req 2) ---------------------
+
+def readiness_declare(*, db_path=None, eval_pack_dir=None, public_key_path=None,
+                      track="A", build_wrapper=None, signing_key_path=None,
+                      official_pack_hashes=None, official_pack_registry=None,
+                      build_wrapper_hashes=None, build_wrapper_registry=None,
+                      track_b_baseline_hashes=None, track_b_baseline_registry=None,
+                      baseline_src=None, track_b_baseline_engine=None,
+                      release_manifest=None, require_server=False, root=None):
+    """The dedicated public-official declaration gate. ALWAYS strict: there is
+    no non-strict declaration. Runs the strict readiness check and attaches a
+    commit-safe `declaration_certificate`. `public_official_declaration` is
+    "ready" only when every strict anchor passes."""
+    report = readiness_check(
+        db_path=db_path, eval_pack_dir=eval_pack_dir,
+        public_key_path=public_key_path, track=track, build_wrapper=build_wrapper,
+        signing_key_path=signing_key_path,
+        official_pack_hashes=official_pack_hashes,
+        official_pack_registry=official_pack_registry,
+        build_wrapper_hashes=build_wrapper_hashes,
+        build_wrapper_registry=build_wrapper_registry,
+        track_b_baseline_hashes=track_b_baseline_hashes,
+        track_b_baseline_registry=track_b_baseline_registry,
+        baseline_src=baseline_src,
+        track_b_baseline_engine=track_b_baseline_engine,
+        require_server=require_server, strict_public_official=True, root=root)
+    report["declaration_certificate"] = _declaration_certificate(
+        report, track=track, eval_pack_dir=eval_pack_dir,
+        public_key_path=public_key_path,
+        official_pack_hashes=official_pack_hashes,
+        official_pack_registry=official_pack_registry,
+        build_wrapper_hashes=build_wrapper_hashes,
+        build_wrapper_registry=build_wrapper_registry,
+        track_b_baseline_hashes=track_b_baseline_hashes,
+        track_b_baseline_registry=track_b_baseline_registry,
+        release_manifest=release_manifest)
+    return report
+
+
+def _one(resolved):
+    resolved = set(resolved or [])
+    return next(iter(resolved)) if len(resolved) == 1 else None
+
+
+def _declaration_certificate(report, *, track, eval_pack_dir, public_key_path,
+                             official_pack_hashes, official_pack_registry,
+                             build_wrapper_hashes, build_wrapper_registry,
+                             track_b_baseline_hashes, track_b_baseline_registry,
+                             release_manifest):
+    """A commit-safe certificate of the declaration: only hashes, fingerprints,
+    and policy — never key material or private paths."""
+    from ceb.hosted.metadata import hash_file
+    track = str(track).upper()
+    is_b = track in ("B", "BOTH")
+
+    fingerprint = None
+    if public_key_path:
+        try:
+            from ceb.hosted.signing import (
+                load_public_key, public_key_fingerprint)
+            fingerprint = public_key_fingerprint(load_public_key(public_key_path))
+        except Exception:  # noqa: BLE001 - certificate degrades, never crashes
+            fingerprint = None
+
+    pack_hash = None
+    if eval_pack_dir:
+        try:
+            from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+            pack_hash = compute_eval_pack_hash(eval_pack_dir)
+        except Exception:  # noqa: BLE001
+            pack_hash = None
+
+    baseline_hash = wrapper_hash = None
+    if is_b:
+        from ceb.track_b.baseline_trust import resolve_baseline_hashes
+        from ceb.hosted.build_wrappers import resolve_wrapper_hashes
+        baseline_hash = _one(resolve_baseline_hashes(
+            cli_hashes=track_b_baseline_hashes,
+            registry_path=track_b_baseline_registry))
+        wrapper_hash = _one(resolve_wrapper_hashes(
+            cli_hashes=build_wrapper_hashes,
+            registry_path=build_wrapper_registry))
+
+    manifest_hash = None
+    if release_manifest:
+        try:
+            manifest_hash = hash_file(release_manifest)
+        except OSError:
+            manifest_hash = None
+
+    return {
+        "schema": DECLARATION_SCHEMA,
+        "benchmark_version": __version__,
+        "track": track,
+        "ready": report["ready"],
+        "public_official_declaration": report["public_official_declaration"],
+        "release_manifest_hash": manifest_hash,
+        "operator_public_key_fingerprint": fingerprint,
+        "official_eval_pack_hash": pack_hash,
+        "track_b_baseline_hash": baseline_hash,
+        "build_wrapper_hash": wrapper_hash,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "known_limitations": list(DECLARATION_LIMITATIONS),
+    }
 
 
 # ----- check groups -----------------------------------------------------------
@@ -214,7 +336,8 @@ def _key_checks(signing_key_path, public_key_path, strict):
 
 
 def _track_b_checks(build_wrapper, wrapper_hashes, wrapper_registry,
-                    baseline_hashes, baseline_registry, baseline_src, root, strict):
+                    baseline_hashes, baseline_registry, baseline_src,
+                    baseline_engine, root, strict):
     out = []
     wrapper_ok, wdetail, wrapper_path = _build_wrapper_present(build_wrapper)
     out.append(_check("track_b_build_wrapper", wrapper_ok, wdetail))
@@ -239,18 +362,44 @@ def _track_b_checks(build_wrapper, wrapper_hashes, wrapper_registry,
     out.append(_baseline_trust_check(baseline_hashes, baseline_registry,
                                      baseline_src, root, strict))
 
-    # Bench/speed sanity policy: enforced, and NOT bypassable — a failed bench
-    # (or --dev-allow-no-bench override) downgrades to diagnostic-no-bench, never
-    # verified. A real public season needs a bench-capable (pinned Stockfish)
-    # baseline; toy baselines report bench unsupported.
+    # Bench/speed sanity policy statement (always informational).
     out.append(_check("bench_speed_sanity", True,
                       "bench enforced when the baseline supports bench; a failed "
                       "bench or --dev-allow-no-bench downgrades to diagnostic, "
-                      "never verified", required=strict))
+                      "never verified", required=False))
+
+    # Bench CAPABILITY must be PROVEN, not merely asserted (v0.3.5, req 1): a
+    # verified Track B season needs a bench-capable baseline. Strict declaration
+    # blocks unless --track-b-baseline-engine is supplied AND actually reports a
+    # `bench` NPS. A real build is expensive, so this is gated behind the
+    # explicit engine path rather than run by default.
+    out.append(_bench_capability_check(baseline_engine, strict))
 
     # Track B hosted API endpoint importable.
     out.append(_track_b_api_check(strict))
     return out
+
+
+def _bench_capability_check(baseline_engine, strict):
+    if not baseline_engine:
+        return _check(
+            "track_b_bench_capability", False,
+            "bench capability NOT proven; supply --track-b-baseline-engine "
+            "pointing at a bench-capable (pinned Stockfish) baseline engine so "
+            "strict declaration can confirm `bench` is supported", required=strict)
+    import os
+    if not os.path.isfile(baseline_engine):
+        return _check("track_b_bench_capability", False,
+                      "baseline engine not found", required=strict)
+    from ceb.track_b.bench_sanity import run_bench
+    rep = run_bench([str(baseline_engine)])
+    if rep.get("supported"):
+        return _check("track_b_bench_capability", True,
+                      "baseline engine reports bench: nodes=%s nps=%s"
+                      % (rep.get("nodes"), rep.get("nps")), required=strict)
+    return _check("track_b_bench_capability", False,
+                  "baseline engine ran but did not report a `bench` NPS; it is "
+                  "not bench-capable", required=strict)
 
 
 def _baseline_trust_check(baseline_hashes, baseline_registry, baseline_src,
