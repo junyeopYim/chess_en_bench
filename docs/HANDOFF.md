@@ -1,64 +1,63 @@
-# Handoff
+# 핸드오프
 
-## Goal
-chess_en_bench v0.3: hosted official benchmark readiness. Official scores are
-produced only by a hosted evaluator worker from clean snapshots, private eval
-packs, an isolated engine jail, reproducible signed metadata, and
-statistically meaningful evaluations. The untrusted engine can never read
-evaluator internals or hidden data.
+## 목표
+chess_en_bench v0.3: 호스티드 공식 벤치마크 준비 상태. 공식 점수는 깨끗한
+스냅샷, 비공개 평가 팩, 격리된 엔진 감옥(engine jail), 재현 가능한 서명된
+메타데이터, 통계적으로 의미 있는 평가로부터 호스티드 평가자 워커만이
+생성한다. 신뢰할 수 없는 엔진은 평가자 내부나 숨겨진 데이터를 결코 읽을 수
+없다.
 
-## Current state (branch v0.3-hosted-benchmark)
-All P0 and P1 items implemented and tested.
+## 현재 상태 (브랜치 v0.3-hosted-benchmark)
+모든 P0와 P1 항목이 구현되고 테스트됨.
 
 P0:
-- Engine jail (`bench/ceb/jail/`): `--engine-jail docker` confines only the
-  engine — workspace-only read-only mount, no repo/pack/opponent mounts,
-  network-none, read-only root, resource limits, non-root, recursion-guarded.
-- Hidden eval pack + jail combine safely (pack read host-side, never mounted).
-- Artifact visibility model (`bench/ceb/storage/`): public `feedback.json` /
-  `report.public.json`; private full reports/logs; manifest per directory.
-- Hidden-safe errors (`bench/ceb/sanitize.py`, `hidden=` loaders); CLI prints
-  no tracebacks/secrets (`CEB_DEBUG=1` for operators).
-- Hosted pipeline (`bench/ceb/hosted/`, SQLite + store): snapshots, jobs,
-  official worker = only source of `verified: true`. Refuses to verify without
-  a private pack / on scan failure / on strict-gate failure.
-- Reproducibility metadata + HMAC-SHA256 signing (`CEB_SIGNING_KEY`; explicit
-  `unsigned` otherwise).
-- Eval modes quick / official_round / final_eval with CI fields; leaderboard
-  prefers final_eval, then official rounds, never quick.
-- Anti-cheating scanners (`bench/ceb/scan/`): `ceb scan workspace|track-b`.
-- Hosted API endpoints with deny-by-default public artifact serving and
-  `CEB_ADMIN_TOKEN`-gated POSTs.
+- 엔진 감옥(`bench/ceb/jail/`): `--engine-jail docker`는 엔진만 가둔다 —
+  워크스페이스 전용 읽기 전용 마운트, repo/팩/상대 마운트 없음,
+  network-none, 읽기 전용 루트, 리소스 제한, 비루트, 재귀 가드.
+- 숨겨진 평가 팩 + jail이 안전하게 결합됨(팩은 호스트 측에서 읽으며 결코 마운트되지 않음).
+- 산출물 가시성 모델(`bench/ceb/storage/`): 공개 `feedback.json` /
+  `report.public.json`; 비공개 전체 리포트/로그; 디렉터리별 매니페스트.
+- 숨김 안전 오류(`bench/ceb/sanitize.py`, `hidden=` 로더); CLI는 트레이스백/
+  비밀을 출력하지 않음(운영자는 `CEB_DEBUG=1`).
+- 호스티드 파이프라인(`bench/ceb/hosted/`, SQLite + 스토어): 스냅샷, 잡,
+  공식 워커 = `verified: true`의 유일한 출처. 비공개 팩이 없거나 / 스캔 실패
+  시 / strict 게이트 실패 시 검증을 거부한다.
+- 재현성 메타데이터 + HMAC-SHA256 서명(`CEB_SIGNING_KEY`; 그 외에는 명시적
+  `unsigned`).
+- 평가 모드 quick / official_round / final_eval에 CI 필드 포함; 리더보드는
+  final_eval을, 그 다음 공식 라운드를 선호하며 quick은 결코 선호하지 않음.
+- 부정행위 방지 스캐너(`bench/ceb/scan/`): `ceb scan workspace|track-b`.
+- 기본 거부 방식의 공개 산출물 제공과 `CEB_ADMIN_TOKEN`으로 게이트된 POST를
+  갖춘 호스티드 API 엔드포인트.
 
 P1:
-- Optional fastchess adapter (`--runner fastchess`).
-- Track B source-first pipeline (`ceb track-b official run`).
-- Draw adjudication: threefold repetition, insufficient material, configurable
-  halfmove threshold.
-- Stockfish UCI_Elo anchors wired into round config (graceful skip;
-  `anchors_required` for hosted).
+- 선택적 fastchess 어댑터(`--runner fastchess`).
+- Track B 소스 우선 파이프라인(`ceb track-b official run`).
+- 무승부 판정: 3회 동형 반복, 불충분한 기물, 설정 가능한 하프무브 임계값.
+- 라운드 설정에 연결된 Stockfish UCI_Elo 앵커(우아하게 건너뜀;
+  호스티드의 경우 `anchors_required`).
 
-## Test results
-- `pytest -q`: 180 passed, 3 skipped (Docker integration — opt-in via
-  `CEB_DOCKER_TESTS=1`; verified locally with images built: 15 docker tests
-  pass, jailed gate + jailed round + hosted worker all green).
-- Acceptance + hosted smoke + Track B toy commands: all exit 0.
+## 테스트 결과
+- `pytest -q`: 180 passed, 3 skipped (Docker 통합 — `CEB_DOCKER_TESTS=1`로
+  옵트인; 이미지를 빌드해 로컬에서 검증: 15개 docker 테스트
+  통과, jailed 게이트 + jailed 라운드 + 호스티드 워커 모두 정상).
+- 수용 + 호스티드 스모크 + Track B 토이 명령: 모두 종료 코드 0.
 
-## Known limitations
-- Result signing is symmetric (HMAC); public-key attestation is future work.
-- Track B official pipeline builds via a per-tree `ceb_build.sh`; real
-  pinned-Stockfish build wrappers and `bench`/speed sanity are operator-
-  supplied (documented in docs/TRACK_B_OFFICIAL_PIPELINE.md).
-- fastchess adapter folds faults into results (no per-fault attribution) and
-  has no oracle PGN post-validation yet.
-- Hosted backend is SQLite + local FS (single-node MVP); no auth beyond the
-  admin token, no upload transport (submissions are server-local paths).
-- `--eval-pack` is intentionally unsupported with the legacy `--sandbox docker`
-  mode; use `--engine-jail docker` instead.
+## 알려진 한계
+- 결과 서명은 대칭(HMAC)이다; 공개키 증명은 향후 작업이다.
+- Track B 공식 파이프라인은 트리별 `ceb_build.sh`를 통해 빌드한다; 실제
+  고정된 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자가
+  제공한다(docs/TRACK_B_OFFICIAL_PIPELINE.md에 문서화됨).
+- fastchess 어댑터는 결함을 결과에 접어 넣으며(결함별 귀속 없음) 아직 오라클
+  PGN 사후 검증이 없다.
+- 호스티드 백엔드는 SQLite + 로컬 FS이다(단일 노드 MVP); 관리자 토큰을 넘는
+  인증 없음, 업로드 전송 없음(제출물은 서버 로컬 경로).
+- `--eval-pack`은 레거시 `--sandbox docker` 모드에서 의도적으로 지원되지
+  않는다; 대신 `--engine-jail docker`를 사용한다.
 
-## Next steps
-- Asymmetric (public-key) result signing + a published verification key.
-- Real pinned-Stockfish build wrappers + `bench` sanity in the Track B
-  official pipeline; wire it into the hosted worker for Track B jobs.
-- Upload transport + authn for hosted submissions; multi-worker queue.
-- fastchess PGN → oracle post-validation.
+## 다음 단계
+- 비대칭(공개키) 결과 서명 + 공개된 검증 키.
+- Track B 공식 파이프라인에서 실제 고정된 Stockfish 빌드 래퍼 + `bench`
+  검사; Track B 잡을 위해 호스티드 워커에 연결.
+- 호스티드 제출을 위한 업로드 전송 + 인증; 다중 워커 큐.
+- fastchess PGN → 오라클 사후 검증.

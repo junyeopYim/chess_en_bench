@@ -1,24 +1,24 @@
-# Decisions
+# 결정 사항
 
-- 2026-06-12 — v0.3: the engine jail isolates only the untrusted engine (workspace-only mount), not the whole harness; the evaluator stays trusted on the host and reads hidden packs — so hidden data is never on the engine's filesystem even when jailed.
-- 2026-06-12 — v0.3: hidden packs combine with the jail by feeding positions as `position fen ...` UCI lines; the pack directory is never mounted. This is why `--eval-pack` works with `--engine-jail docker` but not the legacy `--sandbox docker`.
-- 2026-06-12 — v0.3: artifacts are public-by-exception via a per-directory manifest (deny by default); only sanitized feedback/public report are public. A leak-scanner test enforces it.
-- 2026-06-12 — v0.3: only the hosted worker mints `verified: true`; it refuses without a private pack, on scan failure, or on strict-gate failure. Local/self-reported leaderboards always carry `verified: false`.
-- 2026-06-12 — v0.3: result signing is symmetric HMAC-SHA256 (keyed by CEB_SIGNING_KEY) for the MVP; no key → explicit `unsigned`, never a false authenticity claim. Public-key attestation is deferred.
-- 2026-06-12 — v0.3: round mode renamed official→official_round and final_eval added; leaderboard prefers final_eval, then official rounds, never quick. Legacy "official" records still count.
-- 2026-06-12 — v0.3: errors that can describe hidden data use SanitizedError (public/private messages); the CLI catch-all withholds unknown exception text (CEB_DEBUG=1 to re-raise).
+- 2026-06-12 — v0.3: 엔진 감옥(engine jail)은 하니스 전체가 아니라 신뢰할 수 없는 엔진만 격리한다(워크스페이스 전용 마운트); 평가자는 호스트에서 신뢰된 채로 남아 숨겨진 팩을 읽는다 — 그래서 숨겨진 데이터는 jail 상태에서도 결코 엔진의 파일시스템에 존재하지 않는다.
+- 2026-06-12 — v0.3: 숨겨진 팩은 포지션을 `position fen ...` UCI 줄로 공급함으로써 jail과 결합한다; 팩 디렉터리는 결코 마운트되지 않는다. 이것이 `--eval-pack`이 `--engine-jail docker`와는 동작하지만 레거시 `--sandbox docker`와는 동작하지 않는 이유이다.
+- 2026-06-12 — v0.3: 산출물은 디렉터리별 매니페스트를 통한 예외적 공개 방식이다(기본은 거부); 정제된 피드백/공개 리포트만 공개된다. 누출 스캐너 테스트가 이를 강제한다.
+- 2026-06-12 — v0.3: 호스티드 워커만 `verified: true`를 발급한다; 비공개 팩이 없거나, 스캔 실패 시, 또는 strict 게이트 실패 시에는 발급을 거부한다. 로컬/자가 보고 리더보드는 항상 `verified: false`를 갖는다.
+- 2026-06-12 — v0.3: 결과 서명은 MVP에서 대칭 HMAC-SHA256(CEB_SIGNING_KEY로 키 지정)이다; 키 없음 → 명시적 `unsigned`이며, 결코 거짓 진위 주장을 하지 않는다. 공개키 증명은 보류한다.
+- 2026-06-12 — v0.3: 라운드 모드 official→official_round로 이름 변경, final_eval 추가; 리더보드는 final_eval을, 그 다음 공식 라운드를 선호하며 quick은 결코 선호하지 않는다. 레거시 "official" 레코드도 여전히 계산된다.
+- 2026-06-12 — v0.3: 숨겨진 데이터를 기술할 수 있는 오류는 SanitizedError(공개/비공개 메시지)를 사용한다; CLI의 포괄 처리기는 알 수 없는 예외 텍스트를 숨긴다(CEB_DEBUG=1로 재발생).
 
-- 2026-06-12 — v0.2: official leaderboard counts official rounds only; quick rounds are diagnostic (`--include-quick`) — free unlimited quick rounds must not corrupt rankings.
-- 2026-06-12 — v0.2: official rounds run the strict gate (perft mandatory); the standalone public gate stays lenient — development friendliness vs. official rule-correctness.
-- 2026-06-12 — v0.2: openings are JSONL (validated UCI move lists applied by the oracle), rotated across opponents in pairs with color swap — .pgn files kept for humans only.
-- 2026-06-12 — v0.2: sandbox re-invokes `ceb` inside a locked-down container (CEB_INSIDE_SANDBOX guard) rather than sandboxing per-process — one image, whole-evaluation isolation.
-- 2026-06-12 — v0.2: hidden eval packs are operator-mounted directories merged over the public pack (manifest extend/replace); rows get synthetic ids so reports/feedback never quote hidden FENs.
-- 2026-06-12 — v0.2: Track B runner takes explicit engine commands (path or bench opponent name) so tests never need Stockfish; real evaluations document pinned-sf_18/same-flags/Threads=1.
+- 2026-06-12 — v0.2: 공식 리더보드는 공식 라운드만 계산한다; quick 라운드는 진단용(`--include-quick`)이다 — 무료 무제한 quick 라운드가 순위를 오염시켜서는 안 된다.
+- 2026-06-12 — v0.2: 공식 라운드는 strict 게이트를 실행한다(perft 필수); 독립 실행형 공개 게이트는 관대하게 유지된다 — 개발 친화성 대 공식 규칙 정확성.
+- 2026-06-12 — v0.2: 오프닝은 JSONL이다(오라클이 적용하는 검증된 UCI 무브 목록), 컬러 스왑과 함께 상대마다 쌍으로 로테이션된다 — .pgn 파일은 사람용으로만 유지된다.
+- 2026-06-12 — v0.2: 샌드박스는 프로세스별 샌드박싱 대신 잠긴 컨테이너 안에서 `ceb`를 다시 호출한다(CEB_INSIDE_SANDBOX 가드) — 하나의 이미지, 전체 평가 격리.
+- 2026-06-12 — v0.2: 숨겨진 평가 팩은 운영자가 마운트하는 디렉터리로 공개 팩 위에 병합된다(매니페스트 extend/replace); 행에는 합성 id가 부여되어 리포트/피드백이 결코 숨겨진 FEN을 인용하지 않는다.
+- 2026-06-12 — v0.2: Track B 러너는 명시적인 엔진 명령(경로 또는 bench 상대 이름)을 받으므로 테스트가 결코 Stockfish를 필요로 하지 않는다; 실제 평가는 pinned-sf_18/same-flags/Threads=1을 문서화한다.
 
-- 2026-06-12 — Core package is stdlib-only (FastAPI/uvicorn as optional `server` extra) — keeps the gate/runner installable anywhere and enforces "from scratch" credibility.
-- 2026-06-12 — Oracle uses copy-make legality filtering over (file,rank)-delta movegen — slower than bitboards but simple to audit; correctness proven by canonical perft counts in tests.
-- 2026-06-12 — `go perft` UCI extension is recommended (warn), not mandatory (fail) in the gate — lets minimal engines pass while still verifying counts when present.
-- 2026-06-12 — Quick rounds are free; only official rounds consume the 3-round budget — gives agents a cheap end-to-end smoke path.
-- 2026-06-12 — Track B pinned to Stockfish 18 / sf_18 / cb3d4ee in stockfish.lock; sources fetched to gitignored third_party/ — never a moving branch, no GPLv3 code in-repo.
-- 2026-06-12 — Configs use a documented YAML subset parsed by ceb.config — avoids a pyyaml dependency for trivially flat files.
-- 2026-06-12 — Match artifacts use UCI movetext in PGN-style wrappers, not SAN — SAN disambiguation complexity isn't worth it for v0.1; JSON is the machine record.
+- 2026-06-12 — 코어 패키지는 stdlib 전용이다(FastAPI/uvicorn은 선택적 `server` extra) — 게이트/러너를 어디서든 설치 가능하게 유지하고 "처음부터" 신뢰성을 강제한다.
+- 2026-06-12 — 오라클은 (file,rank)-델타 무브젠 위에 copy-make 합법성 필터링을 사용한다 — 비트보드보다 느리지만 감사하기 쉽다; 정확성은 테스트의 표준 perft 카운트로 증명된다.
+- 2026-06-12 — `go perft` UCI 확장은 게이트에서 권장(warn)이며 필수(fail)가 아니다 — 최소 엔진이 통과할 수 있게 하면서도 존재할 때는 카운트를 검증한다.
+- 2026-06-12 — quick 라운드는 무료이다; 공식 라운드만 3라운드 예산을 소모한다 — 에이전트에게 저렴한 엔드투엔드 스모크 경로를 제공한다.
+- 2026-06-12 — Track B는 stockfish.lock에서 Stockfish 18 / sf_18 / cb3d4ee로 고정된다; 소스는 gitignore된 third_party/로 가져온다 — 움직이는 브랜치가 아니며, 저장소 내에 GPLv3 코드 없음.
+- 2026-06-12 — 설정은 ceb.config가 파싱하는 문서화된 YAML 하위집합을 사용한다 — 단순히 평평한 파일에 대해 pyyaml 의존성을 피한다.
+- 2026-06-12 — 매치 산출물은 SAN이 아니라 PGN 스타일 래퍼의 UCI 무브텍스트를 사용한다 — SAN 모호성 해소의 복잡성은 v0.1에서 가치가 없다; JSON이 기계용 기록이다.

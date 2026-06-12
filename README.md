@@ -1,22 +1,19 @@
 # chess_en_bench
 
-A benchmark platform for LLM coding agents that **build chess engines from
-scratch** (Track A) or **optimize Stockfish's search** (Track B) under
-controlled, reproducible conditions.
+통제되고 재현 가능한 조건에서 **체스 엔진을 처음부터 만들거나**(Track A) **Stockfish의
+탐색을 최적화하는**(Track B) LLM 코딩 에이전트를 위한 벤치마크 플랫폼이다.
 
-**v0.3 makes the benchmark ready to run as a hosted official evaluation.** An
-untrusted engine can be confined to a Docker **engine jail** that sees only its
-own workspace — never the repository, the opponents, or the hidden eval pack —
-while the trusted evaluator stays on the host. A **hosted pipeline** snapshots
-each submission, runs a static scan + strict gate + scored round against a
-private pack, and is the **only** producer of `verified: true` results. Results
-carry **reproducibility metadata** and an HMAC signature, and artifacts are
-split into sanitized **public** and operator-only **private** views. This is an
-MVP: it is single-node (SQLite + a local object store), signing is symmetric
-(operator-verifiable, not public-key attestation), and uploads are server-local
-paths. All v0.2 commands still work unchanged.
+**v0.3은 벤치마크를 호스팅형 공식 평가로 실행할 수 있도록 준비한다.** 신뢰할 수 없는
+엔진은 자신의 워크스페이스만 보이는 Docker **엔진 감옥(engine jail)** 에 가둘 수 있으며 —
+저장소, 상대, 비공개 평가 팩은 절대 보이지 않는다 — 신뢰되는 평가자(evaluator)는 호스트에
+남는다. **호스팅형 파이프라인**은 각 제출물을 스냅샷한 뒤 정적 스캔 + 엄격 게이트 + 비공개
+팩에 대한 채점 라운드를 실행하며, `verified: true` 결과를 생성하는 **유일한** 경로다. 결과는
+**재현성 메타데이터**와 HMAC 서명을 포함하며, 아티팩트는 정제된 **공개(public)** 뷰와
+운영자 전용 **비공개(private)** 뷰로 분리된다. 이는 MVP다. 단일 노드(SQLite + 로컬 객체
+저장소)이고, 서명은 대칭(운영자 검증 가능, 공개 키 증명은 아님)이며, 업로드는 서버 로컬
+경로다. 모든 v0.2 명령은 변경 없이 그대로 동작한다.
 
-## Quickstart
+## 빠른 시작
 
 ```bash
 git clone https://github.com/junyeopYim/chess_en_bench.git
@@ -30,7 +27,7 @@ ceb doctor                       # environment diagnosis
 pytest -q                        # 180 passed + 3 skipped (Docker tests opt-in: CEB_DOCKER_TESTS=1)
 ```
 
-Run the public gate and a quick round against the bundled example engine:
+공개 게이트와 함께 번들된 예제 엔진에 대한 빠른 라운드를 실행한다:
 
 ```bash
 ceb gate run  --track A --workspace examples/submissions/minimal_uci_engine_python
@@ -43,18 +40,17 @@ ceb leaderboard compute --track A --results runs --include-quick # diagnostic vi
 ceb server start --host 127.0.0.1 --port 8000   # dashboard at http://127.0.0.1:8000/
 ```
 
-## Engine jail (untrusted-engine isolation)
+## 엔진 감옥(engine jail) — 신뢰할 수 없는 엔진의 격리
 
-The engine jail confines **only** the submission's UCI engine; the evaluator
-stays trusted on the host and reads any hidden pack itself. The jailed engine
-sees nothing but its workspace, mounted **read-only** at `/submission` —
-`--network none`, read-only root + tmpfs `/tmp`, `--cpus 1 --memory 1g
---pids-limit 128`, `--security-opt no-new-privileges`, non-root, stdio-only UCI.
-There is no repo, eval-pack, or opponent mount, and the jail image deliberately
-does **not** install the `ceb` package, so a jailed engine cannot import
-evaluator code. Hidden packs combine safely: positions reach the jail only as
-`position fen ...` lines over stdin, so `--eval-pack` works **with**
-`--engine-jail docker` (unlike the legacy `--sandbox docker`).
+엔진 감옥은 **오직** 제출물의 UCI 엔진만 가둔다. 평가자는 호스트에서 신뢰된 상태로 남아
+비공개 팩을 직접 읽는다. 감옥에 갇힌 엔진은 `/submission`에 **읽기 전용(read-only)** 으로
+마운트된 자신의 워크스페이스 외에는 아무것도 보지 못한다 — `--network none`, 읽기 전용 루트
++ tmpfs `/tmp`, `--cpus 1 --memory 1g --pids-limit 128`,
+`--security-opt no-new-privileges`, 비-root, stdio 전용 UCI. 저장소, 평가 팩, 상대
+마운트는 없으며, 감옥 이미지는 의도적으로 `ceb` 패키지를 설치하지 **않으므로** 갇힌 엔진은
+평가자 코드를 import할 수 없다. 비공개 팩은 안전하게 결합된다. 포지션은 stdin을 통한
+`position fen ...` 줄로만 감옥에 도달하므로, `--eval-pack`은 `--engine-jail docker`와
+**함께** 동작한다(레거시 `--sandbox docker`와 달리).
 
 ```bash
 bash scripts/build_jail_image.sh                 # builds chess-en-bench-jail:0.3
@@ -62,22 +58,19 @@ ceb gate run  --track A --workspace <dir> --engine-jail docker
 ceb round run --track A --workspace <dir> --round 1 --eval-pack <private-pack> --engine-jail docker
 ```
 
-`--engine-jail` defaults to `none` (host execution; trusted/local use). Missing
-Docker or a missing image raises an actionable error. The legacy
-`--sandbox docker` mode (whole harness in a container, with the repo mounted) is
-still available but is **not** the hosted official path, and it still rejects
-`--eval-pack`.
+`--engine-jail`의 기본값은 `none`(호스트 실행, 신뢰/로컬 용도)이다. Docker가 없거나 이미지가
+없으면 실행 가능한 조치를 안내하는 오류를 발생시킨다. 레거시 `--sandbox docker` 모드(전체
+하니스를 컨테이너에서, 저장소를 마운트)는 여전히 사용 가능하지만 호스팅형 공식 경로는
+**아니며**, 여전히 `--eval-pack`을 거부한다.
 
-## Hosted official evaluation (MVP)
+## 호스팅형 공식 평가 (MVP)
 
-The hosted pipeline is the **authoritative** path for verified results. The
-official worker is the only code that writes `verified: true`: it runs a static
-scan → strict gate against the private pack → `official_round` (or `final_eval`)
-with the private pack and optional engine jail → public/private artifacts →
-metadata + signing. It **refuses to verify** (writes no verified result) when
-there is no private eval pack, the scan fails, or the strict gate fails. The
-default store is SQLite (`runs/hosted.sqlite`) plus a `<db>_store/` object
-directory.
+호스팅형 파이프라인은 검증된 결과를 위한 **권위 있는(authoritative)** 경로다. 공식
+워커(worker)는 `verified: true`를 기록하는 유일한 코드다. 정적 스캔 → 비공개 팩에 대한 엄격
+게이트 → 비공개 팩과 선택적 엔진 감옥으로 `official_round`(또는 `final_eval`) → 공개/비공개
+아티팩트 → 메타데이터 + 서명 순으로 실행된다. 비공개 평가 팩이 없거나, 스캔이 실패하거나,
+엄격 게이트가 실패하면 **검증을 거부한다**(검증된 결과를 기록하지 않는다). 기본 저장소는
+SQLite(`runs/hosted.sqlite`)와 `<db>_store/` 객체 디렉터리다.
 
 ```bash
 bash scripts/build_jail_image.sh                 # jail image, once
@@ -92,37 +85,35 @@ ceb hosted result show  --run-id myrun --db runs/hosted.sqlite
 ceb hosted leaderboard  --track A --db runs/hosted.sqlite   # verified results only; quick never appears
 ```
 
-Verify a result file later: `ceb hosted verify-result --result <official_result.json>`
-(set `CEB_SIGNING_KEY` to sign/verify; without a key, results are explicitly
-`unsigned` and claim no cryptographic authenticity). The same operations are
-exposed over HTTP under `/api/hosted/...` (admin POST endpoints gated by
-`CEB_ADMIN_TOKEN`; public GET endpoints serve only public artifacts). See
+나중에 결과 파일을 검증한다: `ceb hosted verify-result --result <official_result.json>`
+(서명/검증하려면 `CEB_SIGNING_KEY`를 설정한다. 키가 없으면 결과는 명시적으로
+`unsigned`이며 암호학적 진정성을 주장하지 않는다). 동일한 작업이 `/api/hosted/...` 아래
+HTTP로 노출된다(관리자 POST 엔드포인트는 `CEB_ADMIN_TOKEN`으로 보호되고, 공개 GET
+엔드포인트는 공개 아티팩트만 제공한다). 자세한 내용은
 [docs/benchmark_protocol.md](docs/benchmark_protocol.md),
-[docs/reproducibility.md](docs/reproducibility.md), and
-[docs/RESULT_SIGNING.md](docs/RESULT_SIGNING.md).
+[docs/reproducibility.md](docs/reproducibility.md),
+[docs/RESULT_SIGNING.md](docs/RESULT_SIGNING.md)를 참조한다.
 
-## The two tracks
+## 두 개의 트랙
 
-**Track A — from-scratch engine.** The evaluated agent receives a public spec
-([specs/uci_minimal.md](specs/uci_minimal.md)), a public correctness gate, and
-example FEN/perft data ([tracks/a_from_scratch/public/](tracks/a_from_scratch/public/)).
-It must produce a self-contained UCI engine. The gate may be run **unlimited**
-times. Evaluation uses three modes — `quick` (free, diagnostic), `official_round`
-(consumes 1 of 3 budget units, strict gate), and `final_eval` (strict gate, no
-budget cost, leaderboard-quality). Rounds play the engine against a ladder of
-benchmark-owned opponents (BenchRandom … BenchAlphaBeta3) and score it with an
-Elo-style ladder rating minus fault penalties. See
-[docs/track_a_from_scratch.md](docs/track_a_from_scratch.md).
+**Track A — 처음부터 만드는 엔진.** 평가 대상 에이전트는 공개 명세
+([specs/uci_minimal.md](specs/uci_minimal.md)), 공개 정확성 게이트, 예제 FEN/perft 데이터
+([tracks/a_from_scratch/public/](tracks/a_from_scratch/public/))를 받는다. 자체 완결적인
+UCI 엔진을 생성해야 한다. 게이트는 **무제한** 실행할 수 있다. 평가는 세 가지 모드를 사용한다
+— `quick`(무료, 진단용), `official_round`(예산 3단위 중 1단위 소비, 엄격 게이트),
+`final_eval`(엄격 게이트, 예산 비용 없음, 리더보드 품질). 라운드는 엔진을 벤치마크 소유의
+상대 사다리(BenchRandom … BenchAlphaBeta3)와 맞붙이고, Elo 방식 사다리 레이팅에서 결함
+페널티를 뺀 값으로 채점한다. 자세한 내용은
+[docs/track_a_from_scratch.md](docs/track_a_from_scratch.md)를 참조한다.
 
-**Track B — Stockfish search optimization.** The agent edits only
-search-related files of a **pinned** baseline (Stockfish 18, tag `sf_18`,
-commit `cb3d4ee` — never a moving branch) under a diff whitelist, and is scored
-by candidate-vs-baseline delta Elo. `ceb track-b round run` plays a binary
-candidate against a binary baseline; `ceb track-b official run` is the
-source-first path (scan → build baseline + candidate with the **same** build
-script → paired matches → signed `ceb.track_b.official_result/v1`). See
-[docs/track_b_stockfish_optimization.md](docs/track_b_stockfish_optimization.md)
-and [docs/TRACK_B_OFFICIAL_PIPELINE.md](docs/TRACK_B_OFFICIAL_PIPELINE.md).
+**Track B — Stockfish 탐색 최적화.** 에이전트는 diff 화이트리스트 하에서 **고정된(pinned)**
+베이스라인(Stockfish 18, 태그 `sf_18`, 커밋 `cb3d4ee` — 움직이는 브랜치는 절대 아님)의 탐색
+관련 파일만 편집하며, 후보-대-베이스라인 델타 Elo로 채점된다. `ceb track-b round run`은 바이너리
+후보를 바이너리 베이스라인과 맞붙인다. `ceb track-b official run`은 소스 우선(source-first)
+경로다(스캔 → **동일한** 빌드 스크립트로 베이스라인 + 후보 빌드 → 쌍지어진 매치 → 서명된
+`ceb.track_b.official_result/v1`). 자세한 내용은
+[docs/track_b_stockfish_optimization.md](docs/track_b_stockfish_optimization.md)와
+[docs/TRACK_B_OFFICIAL_PIPELINE.md](docs/TRACK_B_OFFICIAL_PIPELINE.md)를 참조한다.
 
 ```bash
 bash scripts/setup_stockfish.sh   # optional: fetch the pinned baseline (GPLv3, gitignored)
@@ -134,69 +125,65 @@ ceb track-b official run --candidate-src <tree> [--baseline-src <tree>] \
     [--eval-pack <dir>] [--engine-jail docker]
 ```
 
-`ceb track-b round run` and `official run` are diagnostic (`verified: false`):
-real pinned-Stockfish builds with identical flags and a bench sanity check are
-operator steps, not enforced by code. The internal Python runner is the default
-and trusted reference; `--runner fastchess` is an optional high-volume backend.
+`ceb track-b round run`과 `official run`은 진단용이다(`verified: false`). 동일한 플래그로
+실제 고정 Stockfish를 빌드하고 bench 정합성을 점검하는 것은 운영자 단계이며 코드로 강제되지
+않는다. 내부 Python 러너가 기본값이자 신뢰되는 기준이다. `--runner fastchess`는 선택적
+대용량 백엔드다.
 
-## How an evaluation runs
+## 평가가 실행되는 방식
 
-1. `ceb workspace prepare --track A --run-id myrun` — creates `runs/myrun/`;
-   `round run` on `runs/myrun/workspace` infers the run id automatically.
-2. The agent iterates: edit engine → `ceb gate run …` → read the JSON report →
-   repeat. Gate attempts are free and unlimited.
-3. **Local diagnostic round:** `ceb round run --track A --workspace … --round 1`
-   (`--quick` for a free smoke round, `--final-eval` for a leaderboard-quality
-   one). Official-grade rounds re-run the **strict** gate (perft mandatory),
-   start games from the opening suite, and may consume an operator-mounted
-   hidden eval pack (`--eval-pack` / `CEB_PRIVATE_EVAL_DIR`). Every local round
-   is `verified: false` (self-reported).
-4. **Hosted official round:** `ceb hosted submit` then `ceb hosted worker
-   run-once` produces the only `verified: true` results; the hosted leaderboard
-   ranks them (best `final_eval`, else best `official_round`; quick never
-   appears).
+1. `ceb workspace prepare --track A --run-id myrun` — `runs/myrun/`을 생성한다.
+   `runs/myrun/workspace`에 대한 `round run`은 run id를 자동으로 추론한다.
+2. 에이전트가 반복한다: 엔진 편집 → `ceb gate run …` → JSON 보고서 읽기 → 반복. 게이트 시도는
+   무료이며 무제한이다.
+3. **로컬 진단 라운드:** `ceb round run --track A --workspace … --round 1`
+   (무료 스모크 라운드는 `--quick`, 리더보드 품질 라운드는 `--final-eval`). 공식 등급
+   라운드는 **엄격** 게이트(perft 필수)를 다시 실행하고, 오프닝 모음에서 게임을 시작하며,
+   운영자가 마운트한 비공개 평가 팩(`--eval-pack` / `CEB_PRIVATE_EVAL_DIR`)을 소비할 수
+   있다. 모든 로컬 라운드는 `verified: false`(자가 보고)다.
+4. **호스팅형 공식 라운드:** `ceb hosted submit` 후 `ceb hosted worker run-once`가 유일한
+   `verified: true` 결과를 생성한다. 호스팅형 리더보드가 이를 순위 매긴다(최고 `final_eval`,
+   없으면 최고 `official_round`. quick은 절대 등장하지 않는다).
 
-Details: [docs/benchmark_protocol.md](docs/benchmark_protocol.md) and
+세부 사항: [docs/benchmark_protocol.md](docs/benchmark_protocol.md)와
 [docs/agent_protocol.md](docs/agent_protocol.md).
 
-## Repository layout
+## 저장소 구조
 
-| Path | Contents |
+| 경로 | 내용 |
 | --- | --- |
-| `bench/ceb/` | Python package: chess oracle, UCI client, gate, match runner, openings, eval packs, scoring, rounds, CLI |
-| `bench/ceb/jail/` | Engine jail: `engine_jail.py` (front-end), `docker_engine.py` (Docker backend) — confines only the untrusted engine |
-| `bench/ceb/storage/` | Artifact visibility model (`artifacts_manifest.json`; public is deny-by-default) |
-| `bench/ceb/scan/` | Static anti-cheating scanners (`scan workspace`, `scan track-b`) |
-| `bench/ceb/hosted/` | Hosted pipeline: SQLite db, submissions, official worker, metadata, signing, verifier |
-| `bench/ceb/sanitize.py` | Hidden-safe errors (`SanitizedError`, `sanitize_exception`) |
-| `bench/ceb/match/fastchess_runner.py` | Optional fastchess backend (internal runner is the default reference) |
-| `bench/ceb/track_b/official_pipeline.py` | Track B source-first pipeline (scan → build → paired matches → signed result) |
-| `bench/ceb/sandbox/` | Legacy harness-in-container `--sandbox docker` (compat; not the hosted path) |
-| `tracks/` | Track configs, public data (incl. `openings_public.jsonl`), prompts, scoring/penalty tables |
-| `specs/` | Normative contracts (UCI subset, perft extension, submission, feedback, forbidden behaviors) |
-| `docs/` | Protocol, scoring, reproducibility, signing, eval-pack, leaderboard-governance, security docs |
-| `examples/submissions/` | A minimal passing engine and intentionally broken engines |
-| `examples/eval_packs/tiny_private/` | Fake demo hidden-pack showing the operator interface |
-| `infra/docker/engine_jail.Dockerfile` | Engine jail image (`scripts/build_jail_image.sh`, tag `chess-en-bench-jail:0.3`) |
-| `infra/docker/evaluator.Dockerfile` | Legacy sandbox image (`scripts/build_evaluator_image.sh`) |
-| `tests/` | pytest suite (canonical perft counts included); CI runs it on 3.10–3.12 |
-| `runs/`, `artifacts/` | Local outputs (gitignored) |
+| `bench/ceb/` | Python 패키지: 체스 오라클, UCI 클라이언트, 게이트, 매치 러너, 오프닝, 평가 팩, 채점, 라운드, CLI |
+| `bench/ceb/jail/` | 엔진 감옥: `engine_jail.py`(프런트엔드), `docker_engine.py`(Docker 백엔드) — 신뢰할 수 없는 엔진만 가둔다 |
+| `bench/ceb/storage/` | 아티팩트 가시성 모델(`artifacts_manifest.json`; 공개는 기본 거부) |
+| `bench/ceb/scan/` | 정적 부정행위 방지 스캐너(`scan workspace`, `scan track-b`) |
+| `bench/ceb/hosted/` | 호스팅형 파이프라인: SQLite db, 제출물, 공식 워커, 메타데이터, 서명, 검증자 |
+| `bench/ceb/sanitize.py` | 비공개 안전 오류(`SanitizedError`, `sanitize_exception`) |
+| `bench/ceb/match/fastchess_runner.py` | 선택적 fastchess 백엔드(내부 러너가 기본 기준) |
+| `bench/ceb/track_b/official_pipeline.py` | Track B 소스 우선 파이프라인(스캔 → 빌드 → 쌍지어진 매치 → 서명된 결과) |
+| `bench/ceb/sandbox/` | 레거시 컨테이너 내 하니스 `--sandbox docker`(호환용; 호스팅형 경로 아님) |
+| `tracks/` | 트랙 설정, 공개 데이터(`openings_public.jsonl` 포함), 프롬프트, 채점/페널티 표 |
+| `specs/` | 규범적 계약(UCI 부분집합, perft 확장, 제출, 피드백, 금지 동작) |
+| `docs/` | 프로토콜, 채점, 재현성, 서명, 평가 팩, 리더보드 거버넌스, 보안 문서 |
+| `examples/submissions/` | 최소한으로 통과하는 엔진과 의도적으로 망가뜨린 엔진들 |
+| `examples/eval_packs/tiny_private/` | 운영자 인터페이스를 보여주는 가짜 데모 비공개 팩 |
+| `infra/docker/engine_jail.Dockerfile` | 엔진 감옥 이미지(`scripts/build_jail_image.sh`, 태그 `chess-en-bench-jail:0.3`) |
+| `infra/docker/evaluator.Dockerfile` | 레거시 샌드박스 이미지(`scripts/build_evaluator_image.sh`) |
+| `tests/` | pytest 스위트(정규 perft 카운트 포함); CI는 3.10–3.12에서 실행한다 |
+| `runs/`, `artifacts/` | 로컬 출력물(gitignored) |
 
-## Design notes
+## 설계 노트
 
-- The **oracle** (`bench/ceb/chess/`) is dependency-free and validated against
-  canonical perft counts; it adjudicates every move in every game. v0.3 adds
-  threefold repetition, conservative insufficient-material (K vs K, K+B vs K,
-  K+N vs K), and a configurable halfmove draw threshold.
-- Submitted engines are **untrusted**: argv-only spawning, timeouts on every
-  read, bounded output intake, process-group kill, plus the optional engine
-  jail. See [docs/security.md](docs/security.md).
-- **Verified vs unverified:** only the hosted worker writes `verified: true`.
-  Local rounds and direct Track B CLI runs are self-reported diagnostics.
-- Everything machine-readable uses versioned JSON schemas
+- **오라클**(`bench/ceb/chess/`)은 의존성이 없으며 정규 perft 카운트로 검증된다. 모든
+  게임의 모든 수를 판정한다. v0.3은 3회 동형반복, 보수적 기물 부족(K vs K, K+B vs K,
+  K+N vs K), 설정 가능한 하프무브 무승부 임계값을 추가한다.
+- 제출된 엔진은 **신뢰할 수 없다**: argv 전용 스폰, 모든 읽기에 타임아웃, 출력 수신량 제한,
+  프로세스 그룹 종료, 그리고 선택적 엔진 감옥. [docs/security.md](docs/security.md)를 참조한다.
+- **검증됨 대 미검증:** 호스팅형 워커만 `verified: true`를 기록한다. 로컬 라운드와 직접
+  실행한 Track B CLI 실행은 자가 보고 진단이다.
+- 기계가 읽을 수 있는 모든 것은 버전이 명시된 JSON 스키마를 사용한다
   (`ceb.gate.report/v1`, `ceb.round.report.public/v1`,
-  `ceb.hosted.official_result/v1`, `ceb.scan.workspace/v1`, …); see
-  [docs/overview.md](docs/overview.md).
+  `ceb.hosted.official_result/v1`, `ceb.scan.workspace/v1`, …).
+  [docs/overview.md](docs/overview.md)를 참조한다.
 
-License: MIT (see [LICENSE](LICENSE)); Stockfish is GPLv3 and is **not**
-distributed with this repository (see [NOTICE](NOTICE)).
+라이선스: MIT([LICENSE](LICENSE) 참조). Stockfish는 GPLv3이며 이 저장소와 함께
+배포되지 **않는다**([NOTICE](NOTICE) 참조).

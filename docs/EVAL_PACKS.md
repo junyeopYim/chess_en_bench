@@ -1,95 +1,90 @@
-# Evaluation packs
+# 평가 팩(evaluation pack)
 
-An evaluation pack is the data an evaluation consumes. It has a **public**
-part that ships in this repository and an optional **private** part that an
-operator mounts at evaluation time. The loader is `bench/ceb/eval_pack.py`;
-opening validation lives in `bench/ceb/match/openings.py`.
+평가 팩은 평가가 소비하는 데이터다. 이 저장소에 함께 배포되는 **공개(public)**
+부분과, 운영자가 평가 시점에 마운트하는 선택적 **비공개(private)** 부분으로
+구성된다. 로더는 `bench/ceb/eval_pack.py`이며, 오프닝 검증은
+`bench/ceb/match/openings.py`에 있다.
 
-**No real hidden data ships in this repository.** The only private pack in the
-tree is the fake demo at `examples/eval_packs/tiny_private/`, which exists so
-the loader and tests have a documented shape to exercise. Real hidden FENs,
-perft expectations, and openings are operator-managed and mounted per
-deployment.
+**실제 비공개 데이터는 이 저장소에 배포되지 않는다.** 트리에 존재하는 유일한
+비공개 팩은 `examples/eval_packs/tiny_private/`에 있는 가짜 데모뿐이며, 로더와
+테스트가 동작을 검증할 수 있도록 문서화된 형태를 제공하기 위해 존재한다. 실제
+hidden FEN, perft 기댓값, 오프닝은 운영자가 관리하며 배포마다 마운트된다.
 
-## Public pack
+## 공개 팩
 
-The public pack is the Track A `public/` directory, loaded by
-`load_public_pack()`:
+공개 팩은 Track A의 `public/` 디렉터리이며, `load_public_pack()`이 로드한다.
 
 | File | Rows | Format |
 |---|---|---|
-| `tracks/a_from_scratch/public/fen_examples.jsonl` | bestmove-legality positions | `{"id", "fen", "tags"}` |
-| `tracks/a_from_scratch/public/perft_examples.jsonl` | perft expectations | `{"id", "fen", "depth", "nodes"}` |
-| `tracks/a_from_scratch/public/openings_public.jsonl` | opening suite | `{"id", "fen": "startpos"\|FEN, "moves": [UCI...], "tags": [...]}` |
+| `tracks/a_from_scratch/public/fen_examples.jsonl` | bestmove-legality 포지션 | `{"id", "fen", "tags"}` |
+| `tracks/a_from_scratch/public/perft_examples.jsonl` | perft 기댓값 | `{"id", "fen", "depth", "nodes"}` |
+| `tracks/a_from_scratch/public/openings_public.jsonl` | 오프닝 스위트 | `{"id", "fen": "startpos"\|FEN, "moves": [UCI...], "tags": [...]}` |
 
-The resulting `EvalPack` has `source = "public"`.
+그 결과로 만들어지는 `EvalPack`은 `source = "public"`을 가진다.
 
-## Private pack directory
+## 비공개 팩 디렉터리
 
-A private pack is a **directory** containing any of these files (at least one
-is required); their row formats match the public files exactly:
+비공개 팩은 다음 파일들 가운데 일부를 담은 **디렉터리**다(최소 하나는 필수).
+각 행 형식은 공개 파일과 정확히 동일하다.
 
 | File | Extends | Row format |
 |---|---|---|
-| `fen_hidden.jsonl` | public FENs | `{"id", "fen", "tags"}` |
-| `perft_hidden.jsonl` | public perft | `{"id", "fen", "depth", "nodes"}` |
-| `openings_hidden.jsonl` | public openings (see `openings_mode`) | `{"id", "fen": "startpos"\|FEN, "moves": [UCI...], "tags": [...]}` |
-| `manifest.json` | optional | `{"name": ..., "openings_mode": "extend"\|"replace"}` |
+| `fen_hidden.jsonl` | 공개 FEN | `{"id", "fen", "tags"}` |
+| `perft_hidden.jsonl` | 공개 perft | `{"id", "fen", "depth", "nodes"}` |
+| `openings_hidden.jsonl` | 공개 오프닝(`openings_mode` 참조) | `{"id", "fen": "startpos"\|FEN, "moves": [UCI...], "tags": [...]}` |
+| `manifest.json` | 선택 | `{"name": ..., "openings_mode": "extend"\|"replace"}` |
 
-`manifest.json` keys (both optional):
+`manifest.json` 키(둘 다 선택):
 
-- `name` — the pack name reported in artifacts (defaults to the directory
-  name). Other keys (e.g. a `note`) are ignored.
-- `openings_mode` — `"extend"` (default) appends hidden openings to the public
-  suite; `"replace"` uses the hidden openings only. FEN and perft rows
-  **always extend** the public sets; only openings honor `openings_mode`.
+- `name` — 아티팩트에 기록되는 팩 이름(기본값은 디렉터리 이름). 그 외의 키
+  (예: `note`)는 무시된다.
+- `openings_mode` — `"extend"`(기본값)는 hidden 오프닝을 공개 스위트 뒤에
+  덧붙이고, `"replace"`는 hidden 오프닝만 사용한다. FEN과 perft 행은 **항상
+  공개 집합을 확장(extend)**하며, `openings_mode`를 따르는 것은 오프닝뿐이다.
 
-When a private pack is resolved, the `EvalPack.source` becomes
-`"public+private"`.
+비공개 팩이 해석되면 `EvalPack.source`는 `"public+private"`가 된다.
 
-### Id assignment for hidden rows
+### hidden 행의 id 부여
 
-Every row is guaranteed an `id`. If a private row omits one, the loader
-assigns:
+모든 행은 `id`를 갖도록 보장된다. 비공개 행이 id를 생략하면 로더가 다음과 같이
+부여한다.
 
-- `hidden_fen_<line>` in `fen_hidden.jsonl`
-- `hidden_perft_<line>` in `perft_hidden.jsonl`
-- `opening_<line>` in `openings_hidden.jsonl`
+- `fen_hidden.jsonl`에서는 `hidden_fen_<line>`
+- `perft_hidden.jsonl`에서는 `hidden_perft_<line>`
+- `openings_hidden.jsonl`에서는 `opening_<line>`
 
-Hidden rows are also tagged internally (`hidden: true`). Because every row has
-an id, gate failures, round reports, and feedback can reference a hidden row
-by id and never need to quote a hidden FEN or move.
+hidden 행에는 내부적으로 태그(`hidden: true`)도 붙는다. 모든 행에 id가 있으므로
+게이트 실패, 라운드 보고서, 피드백은 hidden 행을 id로 참조할 수 있고 hidden FEN
+이나 수(move)를 인용할 필요가 전혀 없다.
 
-### Hidden-safe loading
+### hidden-safe 로딩
 
-Private files load with `hidden=True`. FENs and opening moves are validated at
-load time (FENs through `parse_fen`, opening moves against the internal move
-oracle), so a corrupt pack fails loudly instead of feeding an illegal position
-into a match. The error messages stay leak-free: a hidden validation error
-quotes the **file basename + row id + "content withheld"** and never the FEN,
-move, or full path. The full detail is kept only on the exception's
-`private_message` for operator logs (`bench/ceb/sanitize.py`).
+비공개 파일은 `hidden=True`로 로드된다. FEN과 오프닝 수는 로드 시점에 검증되므로
+(FEN은 `parse_fen`을 통해, 오프닝 수는 내부 move 오라클에 대해) 손상된 팩은 불법
+포지션을 매치에 흘려보내는 대신 큰 소리로 실패한다. 오류 메시지는 누출이 없도록
+유지된다. hidden 검증 오류는 **파일 basename + 행 id + "content withheld"**를
+인용할 뿐 FEN, 수, 전체 경로는 절대 노출하지 않는다. 전체 상세는 운영자 로그용으로
+예외의 `private_message`에만 보관된다(`bench/ceb/sanitize.py`).
 
-## Resolving a pack
+## 팩 해석하기
 
-`resolve_eval_pack(root, private_dir=None, allow_env=False)` always loads the
-public pack, then merges a private pack if one is resolved. Two ways to supply
-the private directory:
+`resolve_eval_pack(root, private_dir=None, allow_env=False)`는 항상 공개 팩을
+로드한 뒤, 비공개 팩이 해석되면 이를 병합한다. 비공개 디렉터리를 공급하는 방법은
+두 가지다.
 
-1. **`--eval-pack <dir>`** — explicit flag, honored anywhere it is accepted:
+1. **`--eval-pack <dir>`** — 명시적 플래그로, 이를 허용하는 모든 곳에서 적용된다.
    `ceb gate run`, `ceb round run`, `ceb track-b round run`,
-   `ceb track-b official run`, and `ceb hosted worker run-once`.
-2. **`CEB_PRIVATE_EVAL_DIR`** — environment fallback, consumed **only** by
-   evaluations that opt in (`allow_env=True`): the strict Track A gate
-   (`ceb gate run --strict`), official Track A rounds, and **all** Track B
-   rounds (`bench/ceb/track_b/round_runner.py` passes `allow_env=True`). The
-   plain public gate and Track A quick rounds pass `allow_env=False`, so they
-   never read the env var.
+   `ceb track-b official run`, `ceb hosted worker run-once`.
+2. **`CEB_PRIVATE_EVAL_DIR`** — 환경 변수 폴백으로, 옵트인한 평가(`allow_env=True`)
+   에서**만** 소비된다. 즉 strict Track A 게이트(`ceb gate run --strict`), 공식
+   Track A 라운드, **모든** Track B 라운드(`bench/ceb/track_b/round_runner.py`가
+   `allow_env=True`를 전달)이다. 일반 공개 게이트와 Track A quick 라운드는
+   `allow_env=False`를 전달하므로 환경 변수를 절대 읽지 않는다.
 
-Nothing reads a private directory implicitly. The conventional mount points
-(`tracks/a_from_scratch/private/`, `tracks/b_stockfish_opt/private/`) are empty
-placeholders — a deployment must point the flag or env var at an
-operator-managed directory.
+비공개 디렉터리를 암묵적으로 읽는 곳은 없다. 관례적인 마운트 지점
+(`tracks/a_from_scratch/private/`, `tracks/b_stockfish_opt/private/`)은 비어 있는
+플레이스홀더다. 배포 시 플래그나 환경 변수를 운영자가 관리하는 디렉터리로
+가리켜야 한다.
 
 ```bash
 # Strict Track A gate with a private pack
@@ -103,42 +98,39 @@ ceb hosted worker run-once --db runs/hosted.sqlite \
     --eval-pack <private-dir> --engine-jail docker
 ```
 
-## Combining with the engine jail
+## 엔진 감옥(engine jail)과의 결합
 
-A hidden pack combines safely with `--engine-jail docker`. The **evaluator
-stays on the host** and reads the pack there; the jailed engine only ever sees
-individual `position fen ...` UCI lines on its stdin. The pack directory is
-**never mounted** into the jail container — the jail mounts only the
-submission workspace, read-only, at `/submission`
-(`bench/ceb/jail/docker_engine.py`).
+hidden 팩은 `--engine-jail docker`와 안전하게 결합된다. **평가기(evaluator)는
+호스트에 머물며** 그곳에서 팩을 읽는다. 감옥에 갇힌 엔진은 자기 stdin으로 개별
+`position fen ...` UCI 라인만 받을 뿐이다. 팩 디렉터리는 감옥 컨테이너에 **절대
+마운트되지 않는다** — 감옥은 제출물 워크스페이스만 읽기 전용으로 `/submission`에
+마운트한다(`bench/ceb/jail/docker_engine.py`).
 
-Because of this split, `--eval-pack` works **together with `--engine-jail
-docker`**. This is unlike the legacy `--sandbox docker` mode (harness-in-
-container), which still **rejects** `--eval-pack`: that mode would have to
-mount the pack inside the container, so `ceb round run --sandbox docker
---eval-pack ...` aborts with a message pointing you at `--engine-jail docker`
-or `--sandbox none`. Official hosted evaluation uses `--engine-jail docker`,
-not `--sandbox`.
+이러한 분리 덕분에 `--eval-pack`는 **`--engine-jail docker`와 함께** 동작한다.
+이는 레거시 `--sandbox docker` 모드(harness-in-container)와 다른데, 그 모드는
+여전히 `--eval-pack`를 **거부**한다. 해당 모드는 팩을 컨테이너 내부에 마운트해야
+하므로 `ceb round run --sandbox docker --eval-pack ...`는 `--engine-jail docker`
+또는 `--sandbox none`을 가리키는 메시지와 함께 중단된다. 공식 호스트 평가는
+`--sandbox`가 아니라 `--engine-jail docker`를 사용한다.
 
-## Versioning a pack: eval_pack_hash
+## 팩 버전 관리: eval_pack_hash
 
-Official-result metadata records the pack you used so results are reproducible
-and tamper-evident (`bench/ceb/hosted/metadata.py`):
+공식 결과(official-result) 메타데이터는 사용한 팩을 기록하여 결과를 재현 가능하고
+변조에 강하게 만든다(`bench/ceb/hosted/metadata.py`).
 
-- `eval_pack_id` — the pack name (from `manifest.json` or the directory name).
-- `eval_pack_hash` — a deterministic `sha256:` over the pack directory's
-  relative paths and file contents (`hash_directory`), or `null` when no
-  private pack was used.
+- `eval_pack_id` — 팩 이름(`manifest.json` 또는 디렉터리 이름에서).
+- `eval_pack_hash` — 팩 디렉터리의 상대 경로와 파일 내용에 대한 결정적 `sha256:`
+  값(`hash_directory`), 또는 비공개 팩을 사용하지 않은 경우 `null`.
 
-Treat the pack directory as versioned content: change any row and the hash
-changes, so two runs are only comparable when their `eval_pack_hash` matches.
+팩 디렉터리를 버전 관리되는 콘텐츠로 취급하라. 어떤 행이든 바꾸면 해시가 바뀌므로,
+두 실행은 `eval_pack_hash`가 일치할 때만 비교 가능하다.
 
-## The tiny_private demo pack
+## tiny_private 데모 팩
 
-`examples/eval_packs/tiny_private/` shows the exact layout and is exercised by
-the test suite (`tests/test_eval_pack.py`, and as the stand-in private pack in
-`tests/test_hosted.py`, `tests/test_engine_jail.py`, and others). It is
-**fake demonstration data, not a real hidden pack**:
+`examples/eval_packs/tiny_private/`는 정확한 레이아웃을 보여주며 테스트 스위트가
+이를 사용한다(`tests/test_eval_pack.py`, 그리고 `tests/test_hosted.py`,
+`tests/test_engine_jail.py` 등에서 대역 비공개 팩으로). 이것은 **가짜 시연
+데이터이며 실제 hidden 팩이 아니다**.
 
 ```
 examples/eval_packs/tiny_private/
@@ -148,8 +140,8 @@ examples/eval_packs/tiny_private/
   openings_hidden.jsonl  2 opening lines
 ```
 
-Use it to dry-run the loader and CLI flags before pointing them at a real
-operator pack:
+실제 운영자 팩을 가리키기 전에 로더와 CLI 플래그를 dry-run으로 점검하는 데
+사용하라.
 
 ```bash
 ceb round run --track A --workspace <ws> --round 1 \
