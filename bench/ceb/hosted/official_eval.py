@@ -1,23 +1,25 @@
 """Official evaluation: the only path that produces verified results.
 
-Pipeline for one Track A submission:
+Pipeline for one Track A submission (v0.3.2):
   1. require a private eval pack (refuse to verify on public data only)
   2. engine-jail guard: a verifiable profile must run in the docker engine jail
      (P0.1) unless an explicit dev flag downgrades the result to diagnostic
-  3. static anti-cheating scan of the snapshot (ceb.scan)
-  4. strict gate against the private eval pack
-  5. official round / final eval with the private pack, in the engine jail
-  6. public/private artifacts split (visibility manifest)
-  7. public-artifact leak scan (P0.8): refuse to verify if any hidden pack
-     secret would be exposed
-  8. reproducibility metadata + signing (Ed25519 > HMAC > unsigned)
-  9. verified result recorded — only when the profile is verifiable AND every
-     gate above passed AND the engine jail was docker
+  3. trusted official eval-pack guard: a verified result requires an OFFICIAL
+     pack (manifest + non-demo path + optional hash allowlist); the committed
+     demo pack can never verify
+  4. Ed25519 signing guard: a verified result requires an Ed25519 private key
+  5. static anti-cheating scan of the snapshot
+  6. strict gate + matches against the private pack, in the engine jail
+  7. public artifacts written STAGED (private) — never public before scanning
+  8. public-artifact leak scan over the staged set; refuse on any leak
+  9. reproducibility metadata + Ed25519 signature
+ 10. atomic promotion of the staged artifacts to public, then the worker records
+     a verified result
 
-The worker REFUSES to verify when the private eval pack is missing, the scan
-fails, the strict gate fails, a leak is detected, or the engine jail is not
-docker. Self-reported local rounds never reach this code path and are
-therefore never verified.
+The worker REFUSES to verify when the pack is missing/untrusted, the engine
+jail is not docker, no Ed25519 key is configured, the scan or strict gate
+fails, or a leak is detected. Self-reported local rounds never reach this code
+path and are therefore never verified.
 """
 
 import json
@@ -26,15 +28,21 @@ from pathlib import Path
 
 from ceb import paths
 from ceb.eval_pack import resolve_eval_pack, EvalPackError
+from ceb.hosted.eval_pack_trust import (
+    resolve_allowed_hashes, validate_official_eval_pack, EvalPackTrustError)
 from ceb.hosted.metadata import build_metadata
 from ceb.hosted.models import SCHEMA_OFFICIAL_RESULT
 from ceb.hosted.profiles import (
-    PROFILE_OFFICIAL, GRADE_DIAGNOSTIC_UNJAILED, get_profile, profile_for_mode)
-from ceb.hosted.signing import sign_official_result
+    PROFILE_OFFICIAL, GRADE_DIAGNOSTIC_UNJAILED, GRADE_DIAGNOSTIC_UNSIGNED,
+    GRADE_DIAGNOSTIC_UNTRUSTED_PACK, get_profile, profile_for_mode)
+from ceb.hosted.signing import (
+    ALGORITHM_ED25519, ed25519_private_key_path, sign_official_result)
 from ceb.rounds.round_runner import run_round, RoundError
 from ceb.sanitize import SanitizedError, private_detail, sanitize_exception
 from ceb.scan import scan_workspace, scan_public_artifacts
-from ceb.storage import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC, write_artifact
+from ceb.storage import VISIBILITY_PRIVATE, write_artifact
+from ceb.storage.promotion import (
+    promote_public_artifacts, write_staged_public_artifact)
 
 # Tiny profile for toy/CI hosted evaluations (the `smoke` profile). Production
 # uses the configured round modes from tracks/a_from_scratch/scoring.yaml.
@@ -63,8 +71,11 @@ def _resolve_profile(profile, mode, quick_test_mode):
 
 def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
                       profile=None, engine_jail="docker", allow_unjailed=False,
-                      round_number=1, root=None, progress=lambda msg: None,
-                      mode=None, quick_test_mode=False, mode_config=None):
+                      official_pack_hashes=None, official_pack_registry=None,
+                      allow_demo_pack=False, signing_key_path=None,
+                      allow_unsigned=False, round_number=1, root=None,
+                      progress=lambda msg: None, mode=None,
+                      quick_test_mode=False, mode_config=None):
     """Evaluate one snapshot. Returns the signed result dict.
 
     Raises OfficialEvalError (sanitized) when verification preconditions fail;
@@ -95,8 +106,6 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
     # Engine-jail guard (P0.1): a verifiable profile MUST run jailed to be
     # verified. Fail before any evaluation when the jail is missing, unless the
     # operator explicitly downgrades the result to a diagnostic (unverified).
-    # A non-verifiable profile (smoke) is plumbing and runs unjailed regardless
-    # of the flag, so CI never needs docker.
     verified = False
     grade = prof.grade
     if prof.verifiable:
@@ -113,14 +122,45 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
                 "diagnostic (unverified) result" % prof.name)
     run_jail = engine_jail if prof.verifiable else "none"
 
-    # Fail fast with an actionable message if the docker jail is required but
-    # the daemon/image is missing — before any evaluation work.
     if run_jail == "docker":
         from ceb.jail import docker_engine
         try:
             docker_engine.ensure_ready()
         except docker_engine.DockerJailError as exc:
             raise OfficialEvalError("engine jail not ready: %s" % exc)
+
+    # Trusted-pack guard (A) + Ed25519 guard (B) apply only to a result that
+    # would be verified. Both fail BEFORE any evaluation work.
+    trust = None
+    if verified:
+        allowed = resolve_allowed_hashes(cli_hashes=official_pack_hashes,
+                                         registry_path=official_pack_registry)
+        try:
+            trust = validate_official_eval_pack(
+                eval_pack_dir, track="A", root=root, allowed_hashes=allowed,
+                allow_demo=allow_demo_pack)
+        except EvalPackTrustError as exc:
+            raise OfficialEvalError(
+                "official eval pack rejected: %s" % exc.public_message,
+                "official eval pack rejected: %s" % private_detail(exc))
+        if trust.get("demo_path_allowed"):
+            # The pack only passed because --dev-allow-demo-pack bypassed the
+            # committed/demo path check: this is a diagnostic, never verified.
+            verified = False
+            grade = GRADE_DIAGNOSTIC_UNTRUSTED_PACK
+            trust = None
+        elif not ed25519_private_key_path(explicit_path=signing_key_path):
+            if allow_unsigned:
+                verified = False
+                grade = GRADE_DIAGNOSTIC_UNSIGNED
+                trust = None
+            else:
+                raise OfficialEvalError(
+                    "verified %s evaluation requires an Ed25519 signing key "
+                    "(set CEB_SIGNING_PRIVATE_KEY or pass --signing-key); HMAC "
+                    "is not accepted for public official results. Use "
+                    "--dev-allow-unsigned for a diagnostic (unverified) result"
+                    % prof.name)
 
     progress("static scan ...")
     scan_report = scan_workspace(snapshot)
@@ -132,9 +172,6 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
             "static scan failed (%s); submission not eligible for official "
             "evaluation" % ", ".join(rules))
 
-    # Match config: the profile's (tiny for smoke, configured otherwise). An
-    # explicit mode_config override is an operator/testing knob (mirrors
-    # run_round) so the unjailed/diagnostic path can be exercised quickly.
     effective_config = QUICK_TEST_MODE_CONFIG if prof.tiny_config else None
     if mode_config is not None:
         effective_config = mode_config
@@ -145,24 +182,24 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
             snapshot, round_number, mode=eval_mode, run_id=run_id,
             runs_root=out_dir, eval_pack_dir=eval_pack_dir,
             engine_jail=run_jail, mode_config=effective_config,
-            progress=progress, root=root)
+            stage_public=True, progress=progress, root=root)
     except RoundError as exc:
         raise OfficialEvalError(
             "official evaluation failed: %s" % sanitize_exception(exc),
             "official evaluation failed: %s" % exc)
 
     pack = resolve_eval_pack(root, private_dir=eval_pack_dir)
-    seed = 1000 * round_number
     metadata = build_metadata(
-        root=root,
-        eval_pack_dir=eval_pack_dir,
-        eval_pack_id=pack.name,
-        opening_suite=pack.openings,
-        random_seed=seed,
-        verified=verified,
-        cpu_cores=1,
-        memory_limit="1g (engine jail)" if run_jail == "docker" else None,
-    )
+        root=root, eval_pack_dir=eval_pack_dir, eval_pack_id=pack.name,
+        opening_suite=pack.openings, random_seed=1000 * round_number,
+        verified=verified, cpu_cores=1,
+        memory_limit="1g (engine jail)" if run_jail == "docker" else None)
+    metadata["eval_pack_trusted"] = bool(verified and trust)
+    metadata["eval_pack_manifest_hash"] = trust["manifest_hash"] if trust else None
+    metadata["eval_pack_track"] = trust["track"] if trust else None
+    metadata["eval_pack_season"] = trust["season"] if trust else None
+    if trust:
+        metadata["eval_pack_id"] = trust["pack_id"]
 
     result = {
         "schema": SCHEMA_OFFICIAL_RESULT,
@@ -180,15 +217,18 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
         "metadata": metadata,
         "verified": verified,
     }
-    sign_official_result(result)
-    write_artifact(out_dir, "official_result.json", result, VISIBILITY_PUBLIC)
-    # Public copy of feedback at the top level for easy serving.
-    write_artifact(out_dir, "feedback.json", feedback, VISIBILITY_PUBLIC)
+    sign_official_result(result, private_key_path=signing_key_path)
+    # Defense in depth: a verified result MUST be Ed25519-signed.
+    if verified and result["signature"].get("algorithm") != ALGORITHM_ED25519:
+        raise OfficialEvalError(
+            "internal error: verified result is not Ed25519-signed; refusing")
 
-    # Public-artifact leak scan (P0.8): refuse to verify if any hidden pack
-    # secret would reach a public artifact. The report is private and never
-    # echoes the secret itself.
-    leak_report = scan_public_artifacts(out_dir, eval_pack_dir, root)
+    # Stage the top-level public artifacts (private until promoted).
+    write_staged_public_artifact(out_dir, "official_result.json", result)
+    write_staged_public_artifact(out_dir, "feedback.json", feedback)
+
+    # Leak-scan the STAGED public surface BEFORE anything becomes public.
+    leak_report = scan_public_artifacts(out_dir, eval_pack_dir, root, staged=True)
     write_artifact(out_dir, "leak_scan.json", leak_report, VISIBILITY_PRIVATE)
     if not leak_report["passed"]:
         raise OfficialEvalError(
@@ -196,6 +236,8 @@ def run_official_eval(*, run_id, snapshot, eval_pack_dir, out_dir,
             "have been exposed in a public artifact; verification refused",
             "public artifact leak scan failed: %s" % json.dumps(leak_report))
 
+    # Only now promote the staged artifacts to public.
+    promote_public_artifacts(out_dir)
     return result
 
 

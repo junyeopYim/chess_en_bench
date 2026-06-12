@@ -223,7 +223,7 @@ def make_public_report(round_report, pack):
 
 def run_round(workspace, round_number, *, quick=False, mode=None, run_id=None,
               track="A", root=None, runs_root=None, eval_pack_dir=None,
-              mode_config=None, engine_jail="none",
+              mode_config=None, engine_jail="none", stage_public=False,
               progress=lambda msg: None):
     """Run one round. Returns (round_report dict, feedback dict, state).
 
@@ -353,16 +353,24 @@ def run_round(workspace, round_number, *, quick=False, mode=None, run_id=None,
         "score": score,
     }
     # Full report (host paths, hidden opening ids) is a private artifact;
-    # report.public.json and feedback.json are the sanitized views.
+    # report.public.json and feedback.json are the sanitized views. In the
+    # hosted official flow (stage_public=True) the sanitized views are written
+    # STAGED (private until leak-scanned + promoted); local diagnostic rounds
+    # write them public directly.
     write_artifact(round_dir, "report.json", round_report, VISIBILITY_PRIVATE)
-    write_artifact(round_dir, "report.public.json",
-                   make_public_report(round_report, pack), VISIBILITY_PUBLIC)
     register_artifact(runs_root / run_id, "gate_report.json", VISIBILITY_PRIVATE)
+    feedback = make_feedback(round_report)
+    public_report = make_public_report(round_report, pack)
+    if stage_public:
+        from ceb.storage.promotion import write_staged_public_artifact
+        write_staged_public_artifact(round_dir, "report.public.json", public_report)
+        write_staged_public_artifact(round_dir, "feedback.json", feedback)
+    else:
+        write_artifact(round_dir, "report.public.json", public_report,
+                       VISIBILITY_PUBLIC)
+        write_artifact(round_dir, "feedback.json", feedback, VISIBILITY_PUBLIC)
 
     state.record_round(round_number, mode, round_dir / "report.json",
                        score["final_score"])
     state.save(runs_root)
-
-    feedback = make_feedback(round_report)
-    write_artifact(round_dir, "feedback.json", feedback, VISIBILITY_PUBLIC)
     return round_report, feedback, state

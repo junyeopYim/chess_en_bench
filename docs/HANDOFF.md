@@ -1,53 +1,49 @@
 # 핸드오프
 
 ## 목표
-chess_en_bench v0.3.1 — 공식 호스팅형 벤치마크 하드닝. 검증된 점수는 오직 공식
-워커가, 깨끗한 스냅샷 + 비공개 평가 팩 + 정적 스캔 + 엄격 게이트 + Docker 엔진
-감옥 + `official`/`final-production` 프로파일 + 공개 누출 스캔 + 서명을 모두
-만족할 때만 생성한다. *우연한* verified는 불가능하다.
+chess_en_bench v0.3.2 — 공개 공식 호스트형 벤치마크 준비. 정상/악의 운영 모두에서
+우연히 `verified: true`가 생성될 수 없게 한다. verified는 깨끗한 스냅샷 + 신뢰된
+공식 평가 팩 + 정적 스캔 + 엄격 게이트 + Docker 엔진 감옥 + (Track B)격리 빌드
+감옥 + 공개 누출 스캔 + Ed25519 서명 + 원자적 소유권 펜싱 기록을 모두 만족할
+때만 호스트형 워커가 생성한다.
 
-## 현재 상태 (브랜치 v0.3.1-official-hosted-hardening)
-모든 P0와 대부분의 P1이 구현·테스트됨.
+## 현재 상태 (브랜치 v0.3.2-public-official-readiness)
+v0.3.1의 모든 가드 위에 다음을 추가했다.
 
-P0:
-- (P0.1) verifiable 프로파일은 `engine_jail == docker`가 아니면 평가 전에 검증을
-  거부. 워커 `--engine-jail` 기본값 docker. `--dev-allow-unjailed`는 강제로
-  verified=false(diagnostic-unjailed).
-- (P0.2/P0.3) 프로파일 `smoke`/`official`/`final-production`
-  (`bench/ceb/hosted/profiles.py`). smoke는 절대 verified 아님·리더보드 제외.
-  `final_production` 라운드 모드 = 2016게임/paired/movetime 1000ms. 결과·DB에
-  `profile`·`verification_grade` 기록.
-- (P0.4) 공유 선택자 `select_best_verified_result`: 리더보드/`result show`/
-  official-result API가 동일 결과 선택(final-tier 우선).
-- (P0.5) `claim_next_job`(BEGIN IMMEDIATE) 원자적 클레임 + lease 회수 +
-  worker_id/attempt_count/public_detail + 가산 마이그레이션.
-- (P0.6) Track B 호스팅형(Option A): 잡 `track_b_official_eval`,
-  `ceb hosted submit-track-b`, 워커 분기, verified track B 리더보드.
-- (P0.7) 감옥 이미지에 빌드 툴체인(`chess-en-bench-jail:0.4`); C++ 예제
-  `examples/submissions/minimal_uci_engine_cpp`가 strict 게이트 통과.
-- (P0.8) 공개 아티팩트 누출 스캐너(`bench/ceb/scan/leak_scan.py`); 누출 시 검증
-  거부 + 비공개 leak 보고서(해시만).
-- (P0.9) Ed25519 공개키 서명 + `keygen`/`sign-result`/`verify-result`; HMAC 레거시.
-- (P0.10) 문서 갱신(README, 이 파일, HOSTED_*, SECURITY_MODEL, RESULT_SIGNING,
-  LEADERBOARD_GOVERNANCE, TRACK_B_OFFICIAL_PIPELINE, RELEASE_NOTES).
-
-P1: (P1.2) 안전 업로드 `safe_extract_archive` + `submit --archive` + 업로드 API.
-(P1.3) `ceb hosted result export` 공개 번들. (P1.4) 에이전트 궤적 스키마.
+- (A) 신뢰된 공식 평가 팩 가드(`bench/ceb/hosted/eval_pack_trust.py`):
+  `ceb.eval_pack.manifest/v1` + 비-데모 경로 + 선택적 해시 허용목록. 데모 팩은 절대
+  verified 불가. 결과에 `eval_pack_id/hash/manifest_hash/trusted/track/season` 기록.
+- (B) verified는 Ed25519 서명 필수. 키 없으면 거부(또는 `--dev-allow-unsigned`로
+  diagnostic-unsigned). HMAC은 공개 공식 verified 불가. 검증기가 강제.
+- (C) Track B 후보 빌드 격리(`build_jail.py` + `build_wrappers.py` +
+  `infra/docker/track_b_build_jail.Dockerfile`): 신뢰된 운영자 래퍼가 Docker 빌드
+  감옥에서 빌드. verified는 호스트 빌드 거부.
+- (D) 공개 아티팩트 스테이징→누출 스캔→승격(`bench/ceb/storage/promotion.py`):
+  스캔 통과 전에는 어떤 공개 아티팩트도 존재/제공되지 않음.
+- (E) Track B 호스트형 제출 API(`POST .../track-b-submissions`, 관리자 전용).
+- (F) 결과 번들은 선택된 검증 결과만(`--include-all-public`는 진단용).
+- (G) 스트리밍 업로드(청크 단위 바이트 한도, 실패 시 임시 파일 삭제).
+- (H) 공식 준비 점검 `ceb hosted readiness check`(JSON+요약, 미준비 시 비정상 종료).
+- (I) 문서/CI 갱신.
 
 ## 테스트 결과
 - `python -m pip install -e ".[dev,server,hosted]"` 성공.
-- `pytest -q`: **214 passed, 5 skipped**(Docker 통합 opt-in).
-- `CEB_DOCKER_TESTS=1`(jail 이미지 빌드 후): jail/Track B verified/C++-in-jail
-  테스트 포함 23 passed. verified Track A 경로를 수동 검증: verified=true, Ed25519
-  서명, 누출 스캔 통과, 공개 키로 authentic=true.
+- `pytest -q`: **238 passed, 6 skipped**(Docker 통합 opt-in).
+- `CEB_DOCKER_TESTS=1`(jail:0.4 빌드 후): 검증 Track A e2e, 검증 Track B(빌드 감옥),
+  C++-in-jail 게이트 등 opt-in 14개 통과. 검증 결과는 Ed25519 서명·공개키로
+  authentic=true·신뢰 팩으로 확인.
+- `ceb hosted readiness check`: 데모 팩에서 NOT READY(공식팩/Ed25519 FAIL), 공식
+  설정에서 READY.
 
 ## 알려진 한계
-- 검증된 Track B end-to-end(감옥 내 빌드+매치)와 C++-in-jail 게이트는 opt-in
-  Docker 테스트다(CI는 비-docker 가드/진단 경로 + 호스트 g++ C++ 게이트로 커버).
-- fastchess 어댑터는 아직 오라클 PGN 사후 검증이 없어 공식 검증 경로 밖이다(P1.1).
-- 실제 고정 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자 단계다.
-- 호스팅형 백엔드는 SQLite + 로컬 FS(단일 노드)이며 관리자 토큰 외 인증은 없다.
+- 검증 e2e(Track A/B, 빌드 감옥, C++-in-jail)는 opt-in Docker 테스트다(CI는 비-docker
+  가드 + 호스트 g++ C++ 게이트로 커버).
+- 호스트형 백엔드는 SQLite + 로컬 FS(단일 노드)다. 다중 노드 큐/객체 저장소·키 회전·
+  공개키 배포 채널은 운영자 범위다. → 정직한 라벨: **공개 공식 단일 노드 호스트형 MVP**.
+- 실제 고정 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자가 제공한다.
+- fastchess는 오라클 PGN 사후 검증이 없어 공식 검증 경로 밖이다.
 
 ## 다음 단계
-- P1.1 fastchess PGN→오라클 사후 검증(통과해야 공식 경로 편입).
-- 다중 노드 큐/객체 저장소, 키 회전, 공개 키 배포 채널 문서화.
+- fastchess PGN→오라클 사후 검증(통과 시 공식 경로 편입).
+- 다중 노드 큐/객체 저장소, 키 회전, 공개키 배포 채널 문서화.
+- 실제 고정 Stockfish 트러스트 빌드 래퍼 + bench 정합성 자동화.

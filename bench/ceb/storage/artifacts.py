@@ -52,6 +52,20 @@ def register_artifact(directory, name, visibility):
     _save_manifest(directory, manifest)
 
 
+def set_artifact_meta(directory, name, meta):
+    """Set a manifest entry's full metadata dict (visibility + any flags)."""
+    manifest = read_manifest(directory)
+    manifest["artifacts"][name] = dict(meta)
+    _save_manifest(directory, manifest)
+
+
+def artifact_meta(directory, name):
+    """The full manifest metadata dict for an artifact, or None if unlisted."""
+    manifest = read_manifest(directory)
+    meta = manifest["artifacts"].get(name)
+    return dict(meta) if isinstance(meta, dict) else None
+
+
 def read_manifest(directory):
     path = Path(directory) / MANIFEST_NAME
     if path.is_file():

@@ -109,26 +109,99 @@ def test_smoke_never_on_hosted_leaderboard(smoke_db):
     assert board["entries"] == []  # the smoke result is excluded
 
 
-def test_result_bundle_export_is_public_only(smoke_db, tmp_path):
+def _register_result_with_artifacts(db_path, run_id, *, job_id, mode, score,
+                                    verified, profile, grade, public_names,
+                                    private_names=()):
+    """Insert a result and register public/private artifacts under its job dir."""
+    store = hosted_db.store_dir(db_path)
+    job_dir = store / run_id / ("job_%d_attempt_1" % job_id)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    result_path = job_dir / "official_result.json"
+    conn = hosted_db.connect(db_path)
+    try:
+        if hosted_db.get_run(conn, run_id) is None:
+            hosted_db.create_run(conn, run_id, "A")
+        for name in public_names + tuple(private_names):
+            (job_dir / name).write_text('{"x": 1}')
+        rid = hosted_db.add_result(
+            conn, run_id, job_id, verified=verified, mode=mode, score=score,
+            result_path=result_path, profile=profile, verification_grade=grade,
+            track="A")
+        for name in public_names:
+            hosted_db.register_artifact(conn, "%s_j%d_%s" % (run_id, job_id, name),
+                                        run_id, job_dir / name, "public")
+        for name in private_names:
+            hosted_db.register_artifact(conn, "%s_j%d_%s" % (run_id, job_id, name),
+                                        run_id, job_dir / name, "private")
+    finally:
+        conn.close()
+    return rid
+
+
+def test_result_bundle_selected_only(tmp_path):
+    # F: a run with smoke + official + final-production exports ONLY the
+    # final-production (selected) public artifacts, never private ones.
     import zipfile
     from ceb.hosted.result_bundle import export_result_bundle
 
-    conn = hosted_db.connect(smoke_db)
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    _register_result_with_artifacts(
+        db_path, "run", job_id=1, mode="official_round", score=800.0,
+        verified=False, profile="smoke", grade="diagnostic-smoke",
+        public_names=("official_result.json", "feedback.json"))
+    _register_result_with_artifacts(
+        db_path, "run", job_id=2, mode="official_round", score=820.0,
+        verified=True, profile="official", grade="verified-official",
+        public_names=("official_result.json", "feedback.json"),
+        private_names=("scan_report.json",))
+    final_id = _register_result_with_artifacts(
+        db_path, "run", job_id=3, mode="final_production", score=700.0,
+        verified=True, profile="final-production", grade="verified-final-production",
+        public_names=("official_result.json", "feedback.json"),
+        private_names=("scan_report.json", "leak_scan.json"))
+
+    conn = hosted_db.connect(db_path)
     try:
         out, manifest = export_result_bundle(
-            conn, "toy_run", tmp_path / "bundle.zip", db_path=smoke_db)
+            conn, "run", tmp_path / "bundle.zip", db_path=db_path)
     finally:
         conn.close()
-    assert out.is_file()
+    with zipfile.ZipFile(out) as zf:
+        names = zf.namelist()
+    assert manifest["selected_result_id"] == final_id
+    assert manifest["selected_mode"] == "final_production"
+    assert manifest["official"] is True
+    # Only the final-production (job_3) artifacts, never job_1/job_2.
+    assert any("job_3_attempt_1/official_result.json" in n for n in names)
+    assert not any("job_1_attempt_1" in n for n in names)
+    assert not any("job_2_attempt_1" in n for n in names)
+    # No private artifacts ever.
+    assert not any("scan_report.json" in n for n in names)
+    assert not any("leak_scan.json" in n for n in names)
+    assert "VERIFY.txt" in names and "bundle_manifest.json" in names
+
+
+def test_result_bundle_no_verified_requires_include_all(smoke_db, tmp_path):
+    from ceb.hosted.result_bundle import export_result_bundle, ResultBundleError
+    import zipfile
+
+    conn = hosted_db.connect(smoke_db)
+    try:
+        # Default (official) export refuses when there is no verified result.
+        with pytest.raises(ResultBundleError, match="no verified result"):
+            export_result_bundle(conn, "toy_run", tmp_path / "b1.zip",
+                                 db_path=smoke_db)
+        # Diagnostic bundle works and is marked non-official.
+        out, manifest = export_result_bundle(
+            conn, "toy_run", tmp_path / "b2.zip", db_path=smoke_db,
+            include_all_public=True)
+    finally:
+        conn.close()
+    assert manifest["official"] is False and manifest["selected_only"] is False
     with zipfile.ZipFile(out) as zf:
         names = zf.namelist()
     assert any(n.endswith("official_result.json") for n in names)
-    assert any(n.endswith("feedback.json") for n in names)
-    assert "VERIFY.txt" in names and "bundle_manifest.json" in names
-    # No private artifacts may be bundled.
     assert not any("scan_report.json" in n for n in names)
-    assert not any("leak_scan.json" in n for n in names)
-    assert not any(n.endswith("match_vs_BenchRandom.json") for n in names)
 
 
 def test_smoke_records_worker_and_job_lifecycle(smoke_db):
@@ -178,6 +251,62 @@ def test_missing_jail_image_is_actionable(tmp_path, monkeypatch):
         run_official_eval(
             run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(TINY_PACK),
             out_dir=tmp_path / "out", profile="official", engine_jail="docker")
+
+
+def test_official_eval_rejects_demo_pack(tmp_path, monkeypatch):
+    # A: a verifiable profile refuses to verify against the committed demo pack.
+    # Trust is checked before the engine runs, so we pass the jail pre-flight.
+    import ceb.jail.docker_engine as de
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    with pytest.raises(OfficialEvalError, match="eval pack"):
+        run_official_eval(
+            run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(TINY_PACK),
+            out_dir=tmp_path / "o", profile="official", engine_jail="docker")
+
+
+def test_official_eval_requires_ed25519_key(tmp_path, monkeypatch, official_pack):
+    # B: a verified result needs an Ed25519 key; with a trusted pack but no key
+    # it refuses (before evaluating).
+    import ceb.jail.docker_engine as de
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    monkeypatch.delenv("CEB_SIGNING_PRIVATE_KEY", raising=False)
+    with pytest.raises(OfficialEvalError, match="Ed25519"):
+        run_official_eval(
+            run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
+            out_dir=tmp_path / "o", profile="official", engine_jail="docker")
+
+
+def test_dev_allow_demo_pack_is_never_verified(tmp_path, monkeypatch):
+    # A/regression: --dev-allow-demo-pack must downgrade to a diagnostic, never
+    # verified (parallel to --dev-allow-unjailed / --dev-allow-unsigned).
+    import shutil
+    import ceb.jail.docker_engine as de
+    import ceb.hosted.official_eval as oe
+    from ceb.hosted.signing import generate_keypair
+    from conftest import make_official_pack
+
+    monkeypatch.setattr(de, "ensure_ready", lambda image=de.JAIL_IMAGE: None)
+    generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
+    monkeypatch.setenv("CEB_SIGNING_PRIVATE_KEY", str(tmp_path / "priv.pem"))
+
+    def _fake_round(snapshot, round_number, **kw):
+        return ({"schema": "x", "mode": kw["mode"],
+                 "score": {"final_score": 0.0}}, {"schema": "fb"}, None)
+
+    monkeypatch.setattr(oe, "run_round", _fake_round)
+    # A pack with a valid official manifest but under the repo's examples/.
+    probe = REPO_ROOT / "examples" / "_demo_downgrade_probe"
+    try:
+        make_official_pack(probe)
+        result = run_official_eval(
+            run_id="x", snapshot=EXAMPLE, eval_pack_dir=str(probe),
+            out_dir=tmp_path / "o", profile="official", engine_jail="docker",
+            allow_demo_pack=True)
+    finally:
+        shutil.rmtree(probe, ignore_errors=True)
+    assert result["verified"] is False
+    assert result["verification_grade"] == "diagnostic-untrusted-pack"
+    assert result["metadata"]["eval_pack_trusted"] is False
 
 
 def test_dev_unjailed_runs_but_is_not_verified(tmp_path):
@@ -526,3 +655,147 @@ def test_api_admin_endpoints_gated(api_client, monkeypatch):
     response = api_client.post("/api/hosted/runs", json=payload,
                                headers={"X-CEB-Admin-Token": "sekrit"})
     assert response.status_code == 200
+
+
+def test_api_track_b_submission(api_client, tmp_path, monkeypatch):
+    # E: admin-only Track B submission snapshots both trees and enqueues a job.
+    cand = tmp_path / "cand"
+    base = tmp_path / "base"
+    for tree in (cand, base):
+        (tree / "src").mkdir(parents=True)
+        (tree / "src" / "search.cpp").write_text("int x = 1;\n")
+    payload = {"candidate_src": str(cand), "baseline_src": str(base)}
+    # No admin token -> disabled.
+    monkeypatch.delenv("CEB_ADMIN_TOKEN", raising=False)
+    assert api_client.post("/api/hosted/runs/tbrun/track-b-submissions",
+                           json=payload).status_code == 503
+    monkeypatch.setenv("CEB_ADMIN_TOKEN", "sekrit")
+    resp = api_client.post("/api/hosted/runs/tbrun/track-b-submissions",
+                           json=payload, headers={"X-CEB-Admin-Token": "sekrit"})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["kind"] == "track_b_official_eval"
+    assert data["candidate_hash"].startswith("sha256:")
+    assert data["job_id"]
+
+
+def test_api_track_b_submission_rejects_symlink(api_client, tmp_path, monkeypatch):
+    import os
+    cand = tmp_path / "cand"
+    base = tmp_path / "base"
+    for tree in (cand, base):
+        tree.mkdir()
+        (tree / "src.cpp").write_text("int x;\n")
+    os.symlink("/etc/passwd", cand / "link")
+    monkeypatch.setenv("CEB_ADMIN_TOKEN", "sekrit")
+    resp = api_client.post("/api/hosted/runs/tbsym/track-b-submissions",
+                           json={"candidate_src": str(cand), "baseline_src": str(base)},
+                           headers={"X-CEB-Admin-Token": "sekrit"})
+    assert resp.status_code == 400
+    assert "symlink" in resp.json()["detail"]
+
+
+def test_api_upload_streaming_rejects_oversized(api_client, monkeypatch):
+    # G: the streaming upload enforces a byte limit as it reads.
+    monkeypatch.setenv("CEB_ADMIN_TOKEN", "sekrit")
+    monkeypatch.setattr("ceb.api.main._MAX_UPLOAD_BYTES", 100)
+    api_client.post("/api/hosted/runs", json={"run_id": "uprun", "track": "A"},
+                    headers={"X-CEB-Admin-Token": "sekrit"})
+    resp = api_client.post(
+        "/api/hosted/runs/uprun/upload?filename=ws.tar.gz",
+        content=b"x" * 5000, headers={"X-CEB-Admin-Token": "sekrit"})
+    assert resp.status_code == 413
+
+
+# ----- H: official readiness check --------------------------------------------
+
+def test_readiness_check_not_ready_with_demo_pack(tmp_path):
+    from ceb.hosted.readiness import readiness_check
+
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    report = readiness_check(db_path=str(db_path), eval_pack_dir=str(TINY_PACK),
+                             track="A")
+    assert report["schema"].startswith("ceb.hosted.readiness")
+    checks = {c["name"]: c for c in report["checks"]}
+    assert checks["package_version"]["ok"] is True
+    assert checks["db_schema_migrated"]["ok"] is True
+    assert checks["official_eval_pack_trusted"]["ok"] is False  # demo pack
+    assert checks["demo_pack_rejected"]["ok"] is True           # guard works
+    assert checks["smoke_not_verifiable"]["ok"] is True
+    assert checks["final_production_game_floor"]["ok"] is True
+    assert report["ready"] is False
+
+
+def test_readiness_check_ready_with_official_setup(tmp_path, official_pack,
+                                                   monkeypatch):
+    import ceb.jail.docker_engine as de
+    import ceb.hosted.readiness as rmod
+    from ceb.hosted.signing import generate_keypair
+
+    priv = tmp_path / "priv.pem"
+    pub = tmp_path / "pub.pem"
+    generate_keypair(priv, pub)
+    monkeypatch.setattr(de, "docker_available", lambda: True)
+    monkeypatch.setattr(rmod, "_image_present", lambda image: True)
+
+    db_path = hosted_db.init_db(tmp_path / "hosted.sqlite")
+    report = rmod.readiness_check(
+        db_path=str(db_path), eval_pack_dir=str(official_pack),
+        public_key_path=str(pub), signing_key_path=str(priv), track="A")
+    failed = [c["name"] for c in report["checks"]
+              if c["required"] and not c["ok"]]
+    assert report["ready"] is True, failed
+    checks = {c["name"]: c for c in report["checks"]}
+    # Unpinned (no allowlist): a non-blocking warning recommends pinning.
+    assert checks["official_pack_pinned"]["ok"] is False
+    assert checks["official_pack_pinned"]["required"] is False
+
+    # With a matching allowlist the pack is pinned.
+    from ceb.hosted.eval_pack_trust import compute_eval_pack_hash
+    pinned = rmod.readiness_check(
+        db_path=str(db_path), eval_pack_dir=str(official_pack),
+        public_key_path=str(pub), signing_key_path=str(priv), track="A",
+        official_pack_hashes=[compute_eval_pack_hash(official_pack)])
+    assert {c["name"]: c for c in pinned["checks"]}["official_pack_pinned"]["ok"]
+
+
+# ----- verified Track A end-to-end (opt-in docker) ----------------------------
+
+def _jail_ready():
+    import os, shutil, subprocess
+    from ceb.jail.docker_engine import JAIL_IMAGE
+    if os.environ.get("CEB_DOCKER_TESTS") != "1" or not shutil.which("docker"):
+        return False
+    return subprocess.run(["docker", "image", "inspect", JAIL_IMAGE],
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL).returncode == 0
+
+
+@pytest.mark.skipif(not _jail_ready(),
+                    reason="set CEB_DOCKER_TESTS=1 with docker + jail image")
+def test_verified_track_a_end_to_end_in_jail(tmp_path, official_pack):
+    import os
+    from ceb.hosted.signing import generate_keypair, load_public_key
+    from ceb.hosted.verifier import verify_result_file
+    from ceb.storage import public_artifacts
+
+    generate_keypair(tmp_path / "priv.pem", tmp_path / "pub.pem")
+    os.environ["CEB_SIGNING_PRIVATE_KEY"] = str(tmp_path / "priv.pem")
+    try:
+        result = run_official_eval(
+            run_id="v", snapshot=EXAMPLE, eval_pack_dir=str(official_pack),
+            out_dir=tmp_path / "out", profile="official", engine_jail="docker",
+            mode_config=TINY_CONFIG)
+    finally:
+        os.environ.pop("CEB_SIGNING_PRIVATE_KEY", None)
+    assert result["verified"] is True
+    assert result["metadata"]["eval_pack_trusted"] is True
+    assert result["metadata"]["eval_pack_id"] == "ceb-test-2026s1"
+    assert result["signature"]["algorithm"] == "ed25519"
+    # Staged public artifacts were promoted.
+    assert "official_result.json" in public_artifacts(tmp_path / "out")
+    # Third-party verification with the operator public key is authentic.
+    verdict = verify_result_file(tmp_path / "out" / "official_result.json",
+                                 public_key=load_public_key(tmp_path / "pub.pem"))
+    assert verdict["authentic"] is True
+    assert verdict["public_official_signing"] is True

@@ -10,6 +10,42 @@
 테스트가 동작을 검증할 수 있도록 문서화된 형태를 제공하기 위해 존재한다. 실제
 hidden FEN, perft 기댓값, 오프닝은 운영자가 관리하며 배포마다 마운트된다.
 
+## 신뢰된 공식 팩(verified 전용, v0.3.2)
+
+공개 공식 `verified: true` 결과는 **신뢰된 공식 팩**만 사용할 수 있다(데모 팩은
+절대 불가). 신뢰 검증은 `bench/ceb/hosted/eval_pack_trust.py`의
+`validate_official_eval_pack`이 수행한다. 공식 팩 디렉터리는 다음 매니페스트를
+포함해야 한다:
+
+```json
+{
+  "schema": "ceb.eval_pack.manifest/v1",
+  "pack_id": "ceb-A-2026s1",
+  "name": "Track A official pack 2026 season 1",
+  "track": "A",
+  "season": "2026-s1",
+  "official": true,
+  "visibility": "private",
+  "openings_mode": "replace"
+}
+```
+
+검증 규칙:
+
+- `schema`가 `ceb.eval_pack.manifest/v1`이고 위 키가 모두 존재해야 한다.
+- `official`은 `true`, `visibility`는 `"private"`, `track`은 `"A"`/`"B"`/`"both"`
+  (평가 트랙과 일치해야 함).
+- 팩은 저장소의 `examples/` 또는 `tests/` 같은 커밋/데모 경로 **밖**에 있어야 한다
+  (개발용 `--dev-allow-demo-pack` 예외).
+- 운영자가 허용목록을 제공하면 팩의 내용 해시(`hash_directory`의 `sha256:`)가
+  일치해야 한다. 허용목록 출처: env `CEB_OFFICIAL_EVAL_PACK_HASHES`(콤마 구분),
+  `--official-pack-hash`(반복/콤마), `--official-pack-registry`(JSON/텍스트 파일).
+
+verified 결과 메타데이터에 기록되는 신뢰 필드: `eval_pack_id`, `eval_pack_hash`,
+`eval_pack_manifest_hash`, `eval_pack_trusted: true`, `eval_pack_track`,
+`eval_pack_season`. 팩 해시는 `ceb hosted readiness check --eval-pack <dir>`로
+확인할 수 있다.
+
 ## 공개 팩
 
 공개 팩은 Track A의 `public/` 디렉터리이며, `load_public_pack()`이 로드한다.

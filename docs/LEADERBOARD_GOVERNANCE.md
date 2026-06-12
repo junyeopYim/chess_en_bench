@@ -24,23 +24,58 @@
 1. 비공개 eval 팩 필수(없으면 거부),
 2. **엔진 감옥 가드**: verifiable 프로파일은 `engine_jail == docker`가 아니면
    평가 전에 검증을 거부한다(P0.1),
-3. 스냅샷의 정적 부정 방지(anti-cheating) 스캔,
-4. **비공개** eval 팩에 대한 엄격 게이트,
-5. 비공개 팩 + Docker 엔진 감옥으로 `official_round` /
-   `final_production`(또는 레거시 `final_eval`),
-6. 공개/비공개 아티팩트 분리,
-7. **공개 아티팩트 누출 스캔**(누출 시 검증 거부),
-8. 재현성 메타데이터 + 서명(Ed25519 권장),
-9. DB에 `verified=1`로 기록된 결과(`profile`, `verification_grade` 포함).
+3. **신뢰 공식 eval 팩 가드 (A)**: 검증된 결과는 운영자 OFFICIAL 팩을 요구한다
+   (`bench/ceb/hosted/eval_pack_trust.py`, `validate_official_eval_pack`). 팩에는
+   `manifest.json`(스키마 `ceb.eval_pack.manifest/v1`, 키 `pack_id` / `name` /
+   `track` / `season` / `official: true` / `visibility: "private"` /
+   `openings_mode`)이 있어야 하고, 리포의 `examples/` · `tests/` **밖**에 살아야
+   한다(`--dev-allow-demo-pack`만이 이 경로 검사를 우회). 운영자 허용목록이 주어지면
+   (env `CEB_OFFICIAL_EVAL_PACK_HASHES`, CLI `--official-pack-hash`,
+   `--official-pack-registry`) 팩 콘텐츠 해시가 그 안에 있어야 한다,
+4. **Ed25519 서명 가드 (B)**: 검증된 결과는 Ed25519 비공개 키
+   (env `CEB_SIGNING_PRIVATE_KEY` 또는 `--signing-key`)를 요구한다. 키가 없으면
+   평가 전에 검증을 거부하며, `--dev-allow-unsigned`는 결과를 강제로
+   `verified: false`(grade `diagnostic-unsigned`)로 만든다. HMAC은 공식 검증에
+   받아들여지지 않는다,
+5. 스냅샷의 정적 부정 방지(anti-cheating) 스캔,
+6. **비공개** 신뢰 팩 + Docker 엔진 감옥으로 엄격 게이트 + 매치
+   (`official_round` / `final_production` / 레거시 `final_eval`),
+7. **스테이징(D)**: 공개용 아티팩트는 먼저 STAGED(비공개)로 기록되어 누구에게도
+   제공되지 않는다,
+8. **공개 아티팩트 누출 스캔**: STAGED 집합을 재귀적으로 스캔(누출 시 검증 거부 —
+   공개 항목이 전혀 등록되지 않음),
+9. 재현성 메타데이터 + Ed25519 서명,
+10. 통과 시에만 스테이징 아티팩트를 공개로 **승격(D)**,
+11. DB에 `verified=1`로 기록된 결과(`profile`, `verification_grade` 포함;
+    소유권 펜싱 `record_result_if_owned`, `bench/ceb/hosted/db.py`).
 
-비공개 eval 팩이 없거나, 감옥이 docker가 아니거나(개발 플래그 없이), 스캔이
-실패하거나, 엄격 게이트가 실패하거나, 누출이 탐지되면 워커는 **검증을 거부한다**
-— 검증된 결과가 기록되지 않는다.
+비공개 eval 팩이 없거나, **신뢰 공식 팩이 아니거나**, 감옥이 docker가 아니거나
+(개발 플래그 없이), **Ed25519 키가 없거나**, 스캔이 실패하거나, 엄격 게이트가
+실패하거나, 누출이 탐지되면 워커는 **검증을 거부한다** — 검증된 결과가 기록되지
+않는다. 검증된 결과는 신뢰 팩 출처를 메타데이터에 남긴다: `eval_pack_id`,
+`eval_pack_hash`, `eval_pack_manifest_hash`, `eval_pack_trusted: true`,
+`eval_pack_track`, `eval_pack_season`.
+
+**Track B 빌드 격리 (C).** 검증된 Track B는 후보 소유 빌드 스크립트를 호스트에서
+실행하지 않는다(`bench/ceb/track_b/build_jail.py`,
+`bench/ceb/hosted/build_wrappers.py`). 후보/베이스라인 트리 **밖**에 있는 신뢰
+운영자 빌드 래퍼를 워커에 `--build-wrapper`로 넘기면, 그 래퍼가 Docker 빌드 감옥
+안에서 베이스라인과 후보를 **동일하게** 빌드한다(소스 `/src`에 읽기 전용 마운트,
+쓰기 가능 `/out`, `--network none`, 읽기 전용 루트 + tmpfs, cpu/mem/pids 한도,
+비루트; 리포·eval 팩은 마운트하지 않음). 빌드 감옥 이미지는 기본으로
+`chess-en-bench-jail:0.4`를 재사용한다(`chess-en-bench-build-jail:0.4`를 따로 빌드
+가능). 진단 CLI 경로 `ceb track-b official run`은 호스트 빌드를 유지하므로
+**항상 `verified=false`**이고, `run_official_track_b`는 `build_isolation="host"`로
+`verified=True`를 거부한다. 결과 메타데이터는 `build_isolation`(`"jail"` /
+`"host"`)을 기록한다.
 
 **`smoke` 프로파일(=`--quick-test-mode`)은 결코 verified가 아니다.** 프로파일이
 verifiable이 아니므로 어떤 플래그를 줘도 verified 결과를 만들 수 없다("마법 같은
-verified"는 없다). 개발 전용 `--dev-allow-unjailed`도 결과를 강제로
-`verified: false`(diagnostic-unjailed)로 만든다.
+verified"는 없다). 커밋된 데모 팩 `examples/eval_packs/tiny_private`은 공식
+manifest가 없어 **결코 검증될 수 없다**(smoke 프로파일용으로는 무방). HMAC 서명
+결과도 결코 공개 공식 검증을 받을 수 없다(HMAC은 레거시/진단으로 남는다). 개발 전용
+`--dev-allow-unjailed`는 결과를 강제로 `verified: false`(diagnostic-unjailed)로
+만든다.
 
 **로컬 순위는 결코 검증되지 않는다.** `compute_leaderboard`는 로컬
 `ceb round run` 호출이 작성한 `state.json` 파일을 스캔하고 모든 항목에
@@ -105,10 +140,16 @@ verified 결과는 `track_b_official` 모드로 final-tier에 들어간다.
   뷰다. 항목은 러너가 통제하는 로컬 상태에서 계산되며, 스캔도, 비공개 팩
   강제도, 서명도 없다. 이것들을 공식 순위로 취급하지 않는다.
 - **검증된 결과는 공개키로 검증 가능하다.** 검증된 보드는 워커가 산출한
-  결과를 반영하며, 운영자의 **Ed25519 비공개 키**로 서명된다(권장; 레거시 HMAC도
-  지원). 누구나 게시된 운영자 공개 키로 `ceb hosted verify-result --public-key`로
-  진정성을 독립 확인할 수 있다(`docs/RESULT_SIGNING.md` 참조). 서명되지 않은
-  결과는 결코 진정한 것으로 취급되지 않는다.
+  결과를 반영하며, 운영자의 **Ed25519 비공개 키**로 서명된다(검증된 결과는 반드시
+  Ed25519). 검증기(`bench/ceb/hosted/verifier.py`, `verify_result_file`)는
+  `authentic`을 **외부에서 별도로 공급된 공개 키**로 서명을 확인했을 때만 참으로
+  본다(`signature_trust: "supplied-public-key"`). 결과에 박혀 있는 **임베디드
+  공개 키만으로는 진정하지 않다**(`embedded-self-described`, `authentic: false`) —
+  공격자가 자기 키로 위조 결과를 서명해 박을 수 있기 때문이다. 검증된 결과가
+  Ed25519가 아니면 `public_official_signing: false`로 `authentic`을 무효화한다
+  (HMAC·미서명은 결코 공개 공식 진정성을 얻지 못한다). 누구나 게시된 운영자 공개
+  키로 `ceb hosted verify-result --public-key`로 독립 확인할 수 있다
+  (`docs/RESULT_SIGNING.md` 참조).
 - **검증된 결과 전용이 공개용 기본값이다.** `ceb hosted leaderboard`와
   `GET /api/hosted/leaderboard`는 검증된 항목만 반환한다. 미검증 로컬
   보드는 순위 발행이 아니라 자가 점검을 위해 존재한다.

@@ -453,6 +453,12 @@ def cmd_hosted_worker_run_once(args):
     status = run_once(
         args.db, eval_pack_dir=args.eval_pack, engine_jail=args.engine_jail,
         profile=profile, allow_unjailed=args.dev_allow_unjailed,
+        official_pack_hashes=args.official_pack_hash,
+        official_pack_registry=args.official_pack_registry,
+        allow_demo_pack=args.dev_allow_demo_pack,
+        signing_key_path=args.signing_key,
+        allow_unsigned=args.dev_allow_unsigned,
+        build_wrapper=args.build_wrapper,
         worker_id=args.worker_id, lease_seconds=args.lease_seconds,
         progress=lambda msg: _print("  " + msg))
     _print(json.dumps(status, indent=2))
@@ -496,6 +502,26 @@ def cmd_hosted_submit_track_b(args):
     return 0
 
 
+def cmd_hosted_readiness_check(args):
+    from ceb.hosted.readiness import readiness_check
+
+    report = readiness_check(
+        db_path=args.db, eval_pack_dir=args.eval_pack,
+        public_key_path=args.public_key, track=args.track,
+        build_wrapper=args.build_wrapper, signing_key_path=args.signing_key,
+        official_pack_hashes=args.official_pack_hash,
+        official_pack_registry=args.official_pack_registry,
+        require_server=args.require_server)
+    if args.json:
+        _print(json.dumps(report, indent=2))
+    _print("Official readiness — track %s: %s"
+           % (report["track"], "READY" if report["ready"] else "NOT READY"))
+    for c in report["checks"]:
+        mark = "ok  " if c["ok"] else ("FAIL" if c["required"] else "warn")
+        _print("  [%s] %-30s %s" % (mark, c["name"], c["detail"]))
+    return 0 if report["ready"] else 2
+
+
 def cmd_hosted_keygen(args):
     from ceb.hosted.signing import generate_keypair, SigningError
 
@@ -521,16 +547,23 @@ def cmd_hosted_result_export(args):
     try:
         try:
             out_path, manifest = export_result_bundle(
-                conn, args.run_id, args.out, db_path=args.db)
+                conn, args.run_id, args.out, db_path=args.db,
+                include_all_public=args.include_all_public)
         except ResultBundleError as exc:
             _print("export failed: %s" % exc)
             return 2
     finally:
         conn.close()
     _print("exported public result bundle for run %r" % args.run_id)
-    _print("  bundle  : %s" % out_path)
-    _print("  files   : %s" % ", ".join(manifest["files"]))
-    _print("  (public artifacts only; no private/admin detail included)")
+    _print("  bundle   : %s" % out_path)
+    _print("  selected : result #%s (%s)" % (manifest.get("selected_result_id"),
+                                             manifest.get("selected_mode")))
+    _print("  files    : %s" % ", ".join(manifest["files"]))
+    if manifest.get("selected_only"):
+        _print("  (selected best verified result only; public artifacts; no "
+               "private/admin detail)")
+    else:
+        _print("  (DIAGNOSTIC: all public artifacts; NOT an official bundle)")
     return 0
 
 
@@ -842,6 +875,25 @@ def build_parser():
                    help="DEV ONLY: run a verifiable profile without the docker "
                         "jail; the result is forced to verified=false "
                         "(diagnostic) and never reaches the leaderboard")
+    p.add_argument("--official-pack-hash", action="append", default=None,
+                   help="allowlisted official eval-pack content hash (repeat or "
+                        "comma-separate; also CEB_OFFICIAL_EVAL_PACK_HASHES)")
+    p.add_argument("--official-pack-registry", default=None,
+                   help="JSON/text file of allowlisted official eval-pack hashes")
+    p.add_argument("--signing-key", default=None,
+                   help="Ed25519 private key PEM for signing verified results "
+                        "(else CEB_SIGNING_PRIVATE_KEY); REQUIRED to verify")
+    p.add_argument("--build-wrapper", default=None,
+                   help="trusted Track B build wrapper outside the candidate "
+                        "tree (REQUIRED to verify Track B)")
+    p.add_argument("--dev-allow-demo-pack", action="store_true",
+                   help="DEV ONLY: accept a committed/demo eval pack for a "
+                        "verifiable profile (still needs a valid official "
+                        "manifest)")
+    p.add_argument("--dev-allow-unsigned", action="store_true",
+                   help="DEV ONLY: run a verifiable profile without an Ed25519 "
+                        "key; the result is forced to verified=false "
+                        "(diagnostic-unsigned)")
     p.add_argument("--worker-id", default=None,
                    help="identifier recorded on claimed jobs (multi-worker)")
     p.add_argument("--lease-seconds", type=int, default=None,
@@ -861,15 +913,34 @@ def build_parser():
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.set_defaults(func=cmd_hosted_result_show)
     p = result_sub.add_parser(
-        "export", help="export a public result bundle (zip; no private detail)")
+        "export", help="export the selected verified result bundle (zip)")
     p.add_argument("--run-id", required=True)
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.add_argument("--out", required=True, help="output .zip path")
+    p.add_argument("--include-all-public", action="store_true",
+                   help="diagnostic: bundle ALL public artifacts (not just the "
+                        "selected verified result); not an official bundle")
     p.set_defaults(func=cmd_hosted_result_export)
     p = hosted_sub.add_parser("leaderboard", help="verified-only leaderboard")
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.add_argument("--track", default="A")
     p.set_defaults(func=cmd_hosted_leaderboard)
+    readiness = hosted_sub.add_parser(
+        "readiness", help="official-readiness check")
+    readiness_sub = readiness.add_subparsers(dest="subsubcommand", required=True)
+    p = readiness_sub.add_parser("check", help="check public-official readiness")
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--eval-pack", default=None)
+    p.add_argument("--public-key", default=None)
+    p.add_argument("--track", default="A")
+    p.add_argument("--build-wrapper", default=None)
+    p.add_argument("--signing-key", default=None)
+    p.add_argument("--official-pack-hash", action="append", default=None)
+    p.add_argument("--official-pack-registry", default=None)
+    p.add_argument("--require-server", action="store_true",
+                   help="also require the hosted API admin token (server mode)")
+    p.add_argument("--json", action="store_true", help="also print JSON report")
+    p.set_defaults(func=cmd_hosted_readiness_check)
     p = hosted_sub.add_parser("keygen", help="generate an Ed25519 signing keypair")
     p.add_argument("--private-key", required=True, help="output private key path")
     p.add_argument("--public-key", required=True, help="output public key path")

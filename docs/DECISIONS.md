@@ -1,5 +1,10 @@
 # 결정 사항
 
+- 2026-06-13 — v0.3.2: verified는 신뢰된 공식 평가 팩만 사용한다 — `ceb.eval_pack.manifest/v1` 매니페스트 + 저장소 밖 경로 + 선택적 해시 허용목록(`bench/ceb/hosted/eval_pack_trust.py`). 커밋된 데모 팩(tiny_private)은 매니페스트가 없어 절대 verified가 될 수 없다(smoke 전용).
+- 2026-06-13 — v0.3.2: verified는 Ed25519 서명을 요구한다 — 키 없으면 평가 전 거부(또는 `--dev-allow-unsigned`로 diagnostic-unsigned). HMAC은 공개 공식 verified 불가(레거시 진단용). 검증기는 verified+비-ed25519를 authentic=false로 본다.
+- 2026-06-13 — v0.3.2: Track B 후보 빌드는 신뢰된 운영자 래퍼(후보 트리 밖)가 Docker 빌드 감옥에서 수행한다(`build_jail.py`) — 후보 소유 빌드 스크립트의 호스트 실행은 진단 전용이며 verified=false. 베이스라인·후보는 동일 래퍼로 빌드한다.
+- 2026-06-13 — v0.3.2: 공개 아티팩트는 먼저 비공개로 스테이징되고, 누출 스캔 통과 후에만 공개로 승격된다(`storage/promotion.py`) — 스캔 실패 시 어떤 아티팩트도 공개로 표시되지 않는다.
+- 2026-06-13 — v0.3.2: 결과 번들 export 기본값은 선택된 검증 결과의 공개 아티팩트만 담는다(`--include-all-public`는 진단용). 업로드 API는 청크 스트리밍으로 바이트 한도를 강제한다. `ceb hosted readiness check`가 공개 공식 준비도를 점검한다.
 - 2026-06-12 — v0.3.1: verified는 평가 프로파일이 결정한다 — smoke(=quick-test-mode)는 verifiable이 아니므로 어떤 플래그로도 verified가 될 수 없다; official/final-production만 모든 게이트 통과 시 verified. "마법 같은 verified" 금지.
 - 2026-06-12 — v0.3.1: verifiable 프로파일은 `engine_jail == docker`가 아니면 평가 전에 검증을 거부한다(이미지 없으면 빌드 안내 오류로 즉시 실패). `--dev-allow-unjailed`는 강제로 verified=false(diagnostic-unjailed). 워커 기본값은 `--engine-jail docker`.
 - 2026-06-12 — v0.3.1: 결과 서명 기본은 Ed25519 비대칭(누구나 공개 키로 검증)으로 전환; HMAC은 운영자 내부 레거시로 유지. `sign_official_result`는 Ed25519 > HMAC > unsigned. 공개키 검증기와 HMAC 검증기는 서로 결과를 받아들이지 않는다.

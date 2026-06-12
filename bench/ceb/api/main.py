@@ -118,7 +118,14 @@ class RunCreate(BaseModel):
 
 
 class SubmissionCreate(BaseModel):
-    workspace: str  # server-local path (MVP); uploads are future work
+    workspace: str  # server-local path; or use the streaming /upload endpoint
+
+
+class TrackBSubmissionCreate(BaseModel):
+    candidate_src: str          # server-local candidate source tree
+    baseline_src: str           # server-local baseline source tree
+    build_script: str = "ceb_build.sh"   # diagnostic host-build script name
+    engine_relpath: str = "ceb_engine"
 
 
 class JobCreate(BaseModel):
@@ -174,8 +181,10 @@ async def hosted_upload(run_id: str, request: Request,
                         filename: str = "workspace.tar.gz",
                         x_ceb_admin_token: str = Header(default=None)):
     """Admin-only safe upload: POST a .tar.gz/.tar/.zip body; the server
-    extracts it (rejecting symlinks/traversal/absolute paths/oversized) and
-    snapshots + hashes the result (P1.2)."""
+    STREAMS it to a temp file (enforcing a byte limit as it reads), extracts it
+    safely (rejecting symlinks/traversal/absolute paths/oversized), and
+    snapshots + hashes the result. Deploy behind a reverse proxy with its own
+    request body limit (e.g. nginx client_max_body_size)."""
     _require_admin(x_ceb_admin_token)
     from ceb.hosted import db as hosted_db
     from ceb.hosted.submissions import snapshot_workspace, SubmissionError
@@ -184,9 +193,6 @@ async def hosted_upload(run_id: str, request: Request,
 
     if "/" in filename or ".." in filename or not _ARTIFACT_ID_RE.match(filename):
         raise HTTPException(status_code=400, detail="bad filename")
-    body = await request.body()
-    if len(body) > _MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="upload too large")
 
     conn = _hosted_conn()
     try:
@@ -197,8 +203,16 @@ async def hosted_upload(run_id: str, request: Request,
         stamp = "%d_%s" % (int(_time.time()), _uuid.uuid4().hex[:8])
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = os.path.join(tmp, filename)
+            # Stream the body to disk, enforcing the byte limit as we read; the
+            # TemporaryDirectory deletes the partial file on any failure.
+            total = 0
             with open(archive_path, "wb") as fh:
-                fh.write(body)
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > _MAX_UPLOAD_BYTES:
+                        raise HTTPException(status_code=413,
+                                            detail="upload too large")
+                    fh.write(chunk)
             extract_dest = store / run_id / "uploads" / ("upload_%s" % stamp)
             try:
                 workspace = safe_extract_archive(archive_path, extract_dest)
@@ -208,6 +222,49 @@ async def hosted_upload(run_id: str, request: Request,
                 raise HTTPException(status_code=400, detail=exc.public_message)
         submission_id = hosted_db.add_submission(conn, run_id, snapshot, tree_hash)
         return {"submission_id": submission_id, "tree_hash": tree_hash}
+    finally:
+        conn.close()
+
+
+@app.post("/api/hosted/runs/{run_id}/track-b-submissions")
+def hosted_submit_track_b(run_id: str, payload: TrackBSubmissionCreate,
+                          x_ceb_admin_token: str = Header(default=None)):
+    """Admin-only Track B official submission (E): snapshots the candidate and
+    baseline trees (rejecting symlinks/unsafe files), hashes them, and enqueues
+    a track_b_official_eval job. The trusted build wrapper is supplied to the
+    worker (--build-wrapper), never by the candidate."""
+    _require_admin(x_ceb_admin_token)
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.submissions import snapshot_workspace, SubmissionError
+    import time as _time, uuid as _uuid
+    conn = _hosted_conn()
+    try:
+        run = hosted_db.get_run(conn, run_id)
+        if run is None:
+            hosted_db.create_run(conn, run_id, "B")
+        elif run["track"] != "B":
+            raise HTTPException(status_code=409,
+                                detail="run exists for a different track")
+        store = hosted_db.store_dir(_hosted_db_path())
+        stamp = "%d_%s" % (int(_time.time()), _uuid.uuid4().hex[:8])
+        cand_dest = store / run_id / "snapshots" / ("candidate_%s" % stamp)
+        base_dest = store / run_id / "snapshots" / ("baseline_%s" % stamp)
+        try:
+            cand_snap, cand_hash = snapshot_workspace(payload.candidate_src,
+                                                      cand_dest)
+            base_snap, base_hash = snapshot_workspace(payload.baseline_src,
+                                                      base_dest)
+        except SubmissionError as exc:
+            raise HTTPException(status_code=400, detail=exc.public_message)
+        sub_id = hosted_db.add_track_b_submission(
+            conn, run_id, candidate_snapshot=cand_snap, baseline_snapshot=base_snap,
+            candidate_hash=cand_hash, baseline_hash=base_hash,
+            build_script=payload.build_script,
+            engine_relpath=payload.engine_relpath)
+        job_id = hosted_db.enqueue_job(conn, run_id, "track_b_official_eval")
+        return {"submission_id": sub_id, "candidate_hash": cand_hash,
+                "baseline_hash": base_hash, "job_id": job_id,
+                "kind": "track_b_official_eval"}
     finally:
         conn.close()
 

@@ -222,13 +222,23 @@ def verify_result_ed25519(result, public_key=None):
 
 # ----- dispatcher -------------------------------------------------------------
 
-def sign_official_result(result, environ=None):
+def ed25519_private_key_path(environ=None, explicit_path=None):
+    """The configured Ed25519 private key path: explicit override else
+    CEB_SIGNING_PRIVATE_KEY. Returns None when no Ed25519 key is configured."""
+    if explicit_path:
+        return explicit_path
+    return (environ if environ is not None else os.environ).get(PRIVATE_KEY_ENV)
+
+
+def sign_official_result(result, environ=None, private_key_path=None):
     """Sign a result with the strongest configured algorithm: Ed25519 if a
-    private key is configured, else legacy HMAC, else unsigned."""
-    environ = environ or os.environ
-    private_path = environ.get(PRIVATE_KEY_ENV)
-    if private_path:
-        return sign_result_ed25519(result, load_private_key(private_path))
+    private key is configured (explicit path or CEB_SIGNING_PRIVATE_KEY), else
+    legacy HMAC, else unsigned. Public official verified results REQUIRE the
+    Ed25519 path — the caller enforces that (see official_eval/track_b_eval)."""
+    environ = environ if environ is not None else os.environ
+    path = ed25519_private_key_path(environ, private_key_path)
+    if path:
+        return sign_result_ed25519(result, load_private_key(path))
     return sign_result(result, key=get_signing_key(environ))
 
 

@@ -42,6 +42,8 @@ PROFILE_CHOICES = (PROFILE_SMOKE, PROFILE_OFFICIAL, PROFILE_FINAL_PRODUCTION)
 # ----- verification grades (stored on the result + DB row) --------------------
 GRADE_DIAGNOSTIC_SMOKE = "diagnostic-smoke"
 GRADE_DIAGNOSTIC_UNJAILED = "diagnostic-unjailed"
+GRADE_DIAGNOSTIC_UNSIGNED = "diagnostic-unsigned"
+GRADE_DIAGNOSTIC_UNTRUSTED_PACK = "diagnostic-untrusted-pack"
 GRADE_VERIFIED_OFFICIAL = "verified-official"
 GRADE_VERIFIED_FINAL_PRODUCTION = "verified-final-production"
 GRADE_VERIFIED_FINAL_EVAL = "verified-final-eval"

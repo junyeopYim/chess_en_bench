@@ -3,6 +3,44 @@
 버전 번호는 패키지 버전이다(`pyproject.toml`, `bench/ceb/__init__.py`). 각 릴리스는
 이전 CLI 명령이 계속 동작하도록 유지한다.
 
+## v0.3.2 — 공개 공식 호스트형 벤치마크 준비
+
+테마: 정상 운영에서 우연히도 악의적으로도 공개 공식 `verified: true`를 만들 수 없게
+한다. verified는 이제 — 깨끗한 스냅샷 + **신뢰된 공식 평가 팩** + 정적 스캔 + 엄격
+게이트 + Docker 엔진 감옥 + (Track B는) **격리된 빌드 감옥** + 공개 아티팩트 누출 스캔 +
+**Ed25519 서명** + 원자적 소유권 펜싱 기록 — 을 모두 만족할 때만 생성된다.
+
+- **신뢰된 공식 평가 팩 가드**(A, `bench/ceb/hosted/eval_pack_trust.py`): verified는
+  `ceb.eval_pack.manifest/v1` 매니페스트(`pack_id`/`track`/`season`/`official:true`/
+  `visibility:private` 등)를 갖고 저장소 committed/demo 경로 밖에 있는 공식 팩을
+  요구한다. 선택적 허용목록(env `CEB_OFFICIAL_EVAL_PACK_HASHES`, `--official-pack-hash`,
+  `--official-pack-registry`)이 있으면 팩 해시가 일치해야 한다. 커밋된 데모 팩
+  (`examples/eval_packs/tiny_private`)은 절대 verified를 만들 수 없다. 결과는
+  `eval_pack_id`/`eval_pack_hash`/`eval_pack_manifest_hash`/`eval_pack_trusted`/
+  `eval_pack_track`/`eval_pack_season`를 기록한다.
+- **verified는 Ed25519 서명을 요구**(B): verifiable 프로파일은 Ed25519 키
+  (`CEB_SIGNING_PRIVATE_KEY` 또는 `--signing-key`)가 없으면 거부한다. HMAC 서명 결과는
+  공개 공식 verified가 될 수 없다(레거시 진단용으로만 유지). `--dev-allow-unsigned`는
+  강제로 `verified:false`(diagnostic-unsigned). 검증기는 verified 결과가 Ed25519가
+  아니면 `authentic:false`다.
+- **Track B 후보 빌드 격리**(C, `bench/ceb/track_b/build_jail.py`,
+  `bench/ceb/hosted/build_wrappers.py`): verified Track B는 후보 소유 빌드 스크립트를
+  호스트에서 실행하지 않는다. **신뢰된 운영자 래퍼**(후보 트리 밖)가 Docker 빌드 감옥
+  에서 베이스라인·후보를 동일하게 빌드한다(네트워크 없음, 소스 읽기 전용, 출력 쓰기
+  가능, repo/팩 미마운트, 비루트). 진단 호스트 빌드 경로는 항상 `verified:false`다.
+- **공개 아티팩트 스테이징→누출 스캔→승격**(D, `bench/ceb/storage/promotion.py`): 공개
+  대상 아티팩트는 먼저 비공개로 스테이징되고, 누출 스캔 통과 후에만 공개로 승격된다.
+  스캔 실패 시 어떤 아티팩트도 공개로 표시되지 않는다.
+- **Track B 호스트형 제출 API**(E): 관리자 인증
+  `POST /api/hosted/runs/{run_id}/track-b-submissions`.
+- **결과 번들은 선택된 검증 결과만**(F): `ceb hosted result export`는 기본적으로
+  `select_best_verified_result`의 공개 아티팩트만 담는다(`--include-all-public`는 진단용).
+- **스트리밍 업로드**(G): 업로드 API가 본문을 청크로 디스크에 스트리밍하며 바이트 한도를
+  강제하고 실패 시 임시 파일을 삭제한다.
+- **공식 준비 점검**(H): `ceb hosted readiness check`가 버전/DB/Docker/감옥 이미지/공식
+  팩 신뢰/Ed25519 키/프로파일 정책/final-production 게임 하한/Track B 빌드 래퍼/관리자
+  토큰을 점검하고 JSON+요약을 출력하며 준비되지 않으면 0이 아닌 종료 코드를 낸다.
+
 ## v0.3.1 — 공식 호스트형 운영을 위한 하드닝
 
 테마: v0.3의 호스트형 MVP를 공개 공식 벤치마크로 운영해도 정직하게 신뢰할 수 있게

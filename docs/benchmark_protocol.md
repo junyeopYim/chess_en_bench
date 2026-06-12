@@ -244,7 +244,7 @@ ceb hosted leaderboard --track A --db runs/hosted.sqlite
    `select_best_verified_result`(final-tier 우선)로 동일 결과를 고른다.
 
 **재현성 메타데이터**(`bench/ceb/hosted/metadata.py`)는 `benchmark_version`
-(0.3.1), `git_commit`, 평가기와 엔진 감옥 이미지 다이제스트,
+(0.3.2), `git_commit`, 평가기와 엔진 감옥 이미지 다이제스트,
 `eval_pack_id`, `eval_pack_hash`(팩 디렉터리의 sha256),
 `opponent_pool_hash`(`opponents.py`의 sha256), `opening_suite_hash`, 하드웨어
 (cpu 모델/코어, 메모리 제한), 소프트웨어(python, platform, compiler,

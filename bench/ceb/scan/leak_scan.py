@@ -123,40 +123,56 @@ def scan_text_for_leaks(text, secrets):
         for tok in secrets if tok in text)
 
 
-def scan_public_artifacts(out_dir, private_dir, root=None):
-    """Recursively scan every PUBLIC artifact under out_dir against the private
-    pack secrets.
+def _artifacts_to_scan(out_dir, staged):
+    """[(directory, name), ...] of the public-destined artifacts to leak-scan.
 
-    The scan walks every directory manifest in the tree, not just the top
-    level, so it covers exactly the set the hosted worker registers and serves
-    as public (e.g. nested round_<N>/report.public.json and feedback.json). A
-    blind spot here would defeat the whole backstop. The report never contains
-    the secret itself — only the artifact path and a short hash of each leaked
-    token.
+    staged=False: every artifact currently marked visibility=public.
+    staged=True:  every artifact staged for public promotion (private now, with
+                  a staged_public marker) — scanned BEFORE it is promoted."""
+    if staged:
+        from ceb.storage.promotion import staged_public_artifacts
+        return staged_public_artifacts(out_dir)
+    pairs = []
+    for manifest_path in sorted(Path(out_dir).rglob(MANIFEST_NAME)):
+        directory = manifest_path.parent
+        for name in public_artifacts(directory):
+            pairs.append((directory, name))
+    return pairs
+
+
+def scan_public_artifacts(out_dir, private_dir, root=None, *, staged=False):
+    """Recursively scan public-destined artifacts under out_dir against the
+    private pack secrets.
+
+    The scan walks the whole tree, not just the top level, so it covers exactly
+    the set the hosted worker registers and serves as public (e.g. nested
+    round_<N>/report.public.json and feedback.json). With staged=True it scans
+    the staged-public set instead, so the leak gate runs BEFORE promotion. A
+    blind spot here would defeat the backstop. The report never contains the
+    secret itself — only the artifact path and a short hash of each leaked token.
     """
     out_dir = Path(out_dir)
     secrets = collect_pack_secrets(private_dir, root)
     leaks = []
     scanned = []
-    for manifest_path in sorted(out_dir.rglob(MANIFEST_NAME)):
-        directory = manifest_path.parent
-        for name in public_artifacts(directory):
-            path = directory / name
-            try:
-                text = path.read_text(encoding="utf-8")
-            except OSError:
-                continue
-            try:
-                rel = path.relative_to(out_dir).as_posix()
-            except ValueError:
-                rel = name
-            scanned.append(rel)
-            hits = scan_text_for_leaks(text, secrets)
-            if hits:
-                leaks.append({"artifact": rel, "token_hashes": hits})
+    for directory, name in _artifacts_to_scan(out_dir, staged):
+        path = directory / name
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        try:
+            rel = path.relative_to(out_dir).as_posix()
+        except ValueError:
+            rel = name
+        scanned.append(rel)
+        hits = scan_text_for_leaks(text, secrets)
+        if hits:
+            leaks.append({"artifact": rel, "token_hashes": hits})
     return {
         "schema": SCHEMA,
         "secret_token_count": len(secrets),
+        "staged": bool(staged),
         "public_artifacts_scanned": sorted(scanned),
         "leaks": leaks,
         "passed": not leaks,

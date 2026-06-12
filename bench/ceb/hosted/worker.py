@@ -21,7 +21,9 @@ from ceb.storage import VISIBILITY_PRIVATE, visibility_of
 
 def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
              profile=None, quick_test_mode=False, allow_unjailed=False,
-             worker_id=None, lease_seconds=None, mode=None,
+             official_pack_hashes=None, official_pack_registry=None,
+             allow_demo_pack=False, signing_key_path=None, allow_unsigned=False,
+             build_wrapper=None, worker_id=None, lease_seconds=None, mode=None,
              progress=lambda msg: None):
     """Atomically claim and process the oldest queued job. Returns a status dict.
 
@@ -33,8 +35,17 @@ def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
 
     engine_jail defaults to "none" here for programmatic/smoke callers; the CLI
     defaults it to "docker". A verifiable profile still refuses to verify
-    without the docker jail (see ceb.hosted.official_eval).
+    without the docker jail, a trusted official pack, and an Ed25519 key (see
+    ceb.hosted.official_eval / track_b_eval).
     """
+    policy = {
+        "official_pack_hashes": official_pack_hashes,
+        "official_pack_registry": official_pack_registry,
+        "allow_demo_pack": allow_demo_pack,
+        "signing_key_path": signing_key_path,
+        "allow_unsigned": allow_unsigned,
+        "build_wrapper": build_wrapper,
+    }
     conn = hosted_db.connect(db_path)
     try:
         job = hosted_db.claim_next_job(conn, worker_id=worker_id,
@@ -58,13 +69,15 @@ def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
                     conn, job, out_dir, eval_pack_dir=eval_pack_dir,
                     engine_jail=engine_jail, profile=profile,
                     quick_test_mode=quick_test_mode,
-                    allow_unjailed=allow_unjailed, progress=progress)
+                    allow_unjailed=allow_unjailed, policy=policy,
+                    progress=progress)
             else:
                 record = _evaluate_track_a(
                     conn, job, out_dir, eval_pack_dir=eval_pack_dir,
                     engine_jail=engine_jail, profile=profile,
                     quick_test_mode=quick_test_mode,
-                    allow_unjailed=allow_unjailed, mode=mode, progress=progress)
+                    allow_unjailed=allow_unjailed, mode=mode, policy=policy,
+                    progress=progress)
         except Exception as exc:  # noqa: BLE001 - worker must not crash the queue
             hosted_db.finish_job_if_owned(
                 conn, job, "failed", detail=private_detail(exc),
@@ -94,7 +107,8 @@ def run_once(db_path, *, eval_pack_dir=None, engine_jail="none",
 
 
 def _evaluate_track_a(conn, job, out_dir, *, eval_pack_dir, engine_jail,
-                      profile, quick_test_mode, allow_unjailed, mode, progress):
+                      profile, quick_test_mode, allow_unjailed, mode, policy,
+                      progress):
     run_id = job["run_id"]
     submission = hosted_db.latest_submission(conn, run_id)
     if submission is None:
@@ -103,6 +117,11 @@ def _evaluate_track_a(conn, job, out_dir, *, eval_pack_dir, engine_jail,
         run_id=run_id, snapshot=submission["snapshot_path"],
         eval_pack_dir=eval_pack_dir, out_dir=out_dir, profile=profile,
         engine_jail=engine_jail, allow_unjailed=allow_unjailed,
+        official_pack_hashes=policy["official_pack_hashes"],
+        official_pack_registry=policy["official_pack_registry"],
+        allow_demo_pack=policy["allow_demo_pack"],
+        signing_key_path=policy["signing_key_path"],
+        allow_unsigned=policy["allow_unsigned"],
         quick_test_mode=quick_test_mode, mode=mode, progress=progress)
     result_path = Path(out_dir) / "official_result.json"
     return {
@@ -119,7 +138,8 @@ def _evaluate_track_a(conn, job, out_dir, *, eval_pack_dir, engine_jail,
 
 
 def _evaluate_track_b(conn, job, out_dir, *, eval_pack_dir, engine_jail,
-                      profile, quick_test_mode, allow_unjailed, progress):
+                      profile, quick_test_mode, allow_unjailed, policy,
+                      progress):
     from ceb.hosted.track_b_eval import track_b_score
 
     run_id = job["run_id"]
@@ -134,6 +154,12 @@ def _evaluate_track_b(conn, job, out_dir, *, eval_pack_dir, engine_jail,
         engine_relpath=submission["engine_relpath"],
         eval_pack_dir=eval_pack_dir, out_dir=out_dir, engine_jail=engine_jail,
         profile=profile, allow_unjailed=allow_unjailed,
+        official_pack_hashes=policy["official_pack_hashes"],
+        official_pack_registry=policy["official_pack_registry"],
+        allow_demo_pack=policy["allow_demo_pack"],
+        signing_key_path=policy["signing_key_path"],
+        allow_unsigned=policy["allow_unsigned"],
+        build_wrapper=policy["build_wrapper"],
         quick_test_mode=quick_test_mode, progress=progress)
     score = track_b_score(report)
     return {

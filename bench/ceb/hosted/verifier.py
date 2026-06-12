@@ -41,16 +41,23 @@ def verify_result_file(path, *, public_key=None, hmac_key=None):
         trust = "none"
         trusted = False
 
+    claims_verified = bool(result.get("verified"))
+    # A public-official verified result MUST be Ed25519-signed; HMAC and
+    # unsigned results can never be authentic-verified.
+    public_official_signing = (algorithm == ALGORITHM_ED25519
+                               if claims_verified else True)
+
     verdict = {
         "schema": SCHEMA_VERIFICATION,
         "result_path": str(path),
         "result_schema": result.get("schema"),
         "schema_ok": result.get("schema") in _ACCEPTED_SCHEMAS,
-        "claims_verified": bool(result.get("verified")),
+        "claims_verified": claims_verified,
         "signature_algorithm": algorithm,
         "signature_ok": ok,
         "signature_detail": detail,
         "signature_trust": trust,
+        "public_official_signing": public_official_signing,
         "metadata_present": isinstance(result.get("metadata"), dict),
     }
     required_metadata = (
@@ -62,5 +69,6 @@ def verify_result_file(path, *, public_key=None, hmac_key=None):
         key_name for key_name in required_metadata if key_name not in metadata
     ]
     verdict["authentic"] = (verdict["schema_ok"] and ok and trusted
+                            and public_official_signing
                             and not verdict["metadata_missing_keys"])
     return verdict

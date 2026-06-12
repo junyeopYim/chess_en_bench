@@ -74,6 +74,21 @@ jobs:
             echo "ERROR: official profile produced a result without the engine jail"; exit 1
           fi
 
+      - name: Official readiness check (demo pack -> NOT READY)
+        run: |
+          # With the committed demo pack and no docker/key this must report NOT
+          # READY (nonzero), and the demo_pack_rejected guard must pass.
+          ceb hosted readiness check --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --track A --json > /tmp/readiness.json || true
+          python - <<'PY'
+          import json
+          r = json.load(open("/tmp/readiness.json"))
+          checks = {c["name"]: c for c in r["checks"]}
+          assert r["ready"] is False, "demo-pack deployment must not be ready"
+          assert checks["official_eval_pack_trusted"]["ok"] is False
+          assert checks["demo_pack_rejected"]["ok"] is True
+          print("readiness check OK (NOT READY as expected; demo pack rejected)")
+          PY
+
       - name: Result signing (Ed25519 keygen + sign + verify)
         run: |
           ceb hosted keygen --private-key /tmp/ceb_priv.pem --public-key /tmp/ceb_pub.pem
@@ -91,9 +106,11 @@ jobs:
       - name: API import
         run: python -c "from ceb.api.main import app; print(app.title)"
 
-      # Docker engine-jail / sandbox integration tests are skipped here
-      # (no daemon / image in default CI). They cover the VERIFIED official path
-      # (Track A + Track B) and the C++-in-jail build. Run locally with:
-      #   bash scripts/build_jail_image.sh
+      # Docker engine-jail / build-jail / sandbox integration tests are skipped
+      # here (no daemon / image in default CI). They cover the VERIFIED official
+      # path (Track A + Track B with a trusted official pack, Ed25519 key, and
+      # the isolated build jail) and the C++-in-jail build. Run locally with:
+      #   bash scripts/build_jail_image.sh   # toolchain image (engine + build jail)
       #   CEB_DOCKER_TESTS=1 pytest tests/test_engine_jail.py \
-      #       tests/test_sandbox_docker.py tests/test_track_b_official.py
+      #       tests/test_sandbox_docker.py tests/test_track_b_official.py \
+      #       tests/test_hosted.py
