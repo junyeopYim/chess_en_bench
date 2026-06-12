@@ -18,12 +18,17 @@ venv/
 # Third-party sources fetched by scripts/setup_stockfish.sh
 third_party/
 
+# Compiled engine binary from the C++ example (build.sh regenerates it; the
+# committed example is source-only so the static scanner accepts the snapshot).
+examples/submissions/minimal_uci_engine_cpp/engine
+
 # Editors / OS
 .idea/
 .vscode/
 .DS_Store
 
-# Secrets — never commit credentials
+# Secrets — never commit credentials or result-signing keys
 *.token
 *.secret
+*.pem
 .env

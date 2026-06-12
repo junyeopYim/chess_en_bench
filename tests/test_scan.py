@@ -7,9 +7,11 @@ import pytest
 
 from ceb.cli import main
 from ceb.scan import scan_track_b, scan_workspace
+from ceb.scan.leak_scan import collect_pack_secrets, scan_text_for_leaks
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "examples" / "submissions" / "minimal_uci_engine_python"
+TINY_PACK = REPO_ROOT / "examples" / "eval_packs" / "tiny_private"
 
 
 def _workspace(tmp_path, engine_body):
@@ -127,3 +129,27 @@ def test_track_b_clean_allowed_change_passes(tmp_path):
     _tree(candidate, {"src/search.cpp": "int d = 2;\n"})
     report = scan_track_b(baseline, candidate, root=REPO_ROOT)
     assert report["passed"], report["findings"]
+
+
+# ----- public-artifact leak scanner (P0.8) ------------------------------------
+
+def test_leak_scan_flags_hidden_pack_secrets():
+    secrets = collect_pack_secrets(TINY_PACK, REPO_ROOT)
+    for token in ("8/8/8/3k4/8/8/4Q3/4K3", "hidden_scandinavian",
+                  "tiny_kq_endgame"):
+        assert token in secrets, token
+    leaked = scan_text_for_leaks(
+        "score 700, leaked 8/8/8/3k4/8/8/4Q3/4K3 and hidden_scandinavian",
+        secrets)
+    assert len(leaked) >= 2
+
+
+def test_leak_scan_no_false_positive_on_public_text():
+    secrets = collect_pack_secrets(TINY_PACK, REPO_ROOT)
+    # A typical public artifact: pack label + null opening ids, no FENs.
+    clean = ('{"eval_pack": {"name": "tiny_private_example", '
+             '"source": "public+private"}, "opening_ids": null, "score": 700}')
+    assert scan_text_for_leaks(clean, secrets) == []
+    # Common public tokens must not be treated as secret.
+    assert "startpos" not in secrets
+    assert "pack" not in secrets

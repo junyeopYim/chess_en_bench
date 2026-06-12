@@ -1,5 +1,13 @@
 # 결정 사항
 
+- 2026-06-12 — v0.3.1: verified는 평가 프로파일이 결정한다 — smoke(=quick-test-mode)는 verifiable이 아니므로 어떤 플래그로도 verified가 될 수 없다; official/final-production만 모든 게이트 통과 시 verified. "마법 같은 verified" 금지.
+- 2026-06-12 — v0.3.1: verifiable 프로파일은 `engine_jail == docker`가 아니면 평가 전에 검증을 거부한다(이미지 없으면 빌드 안내 오류로 즉시 실패). `--dev-allow-unjailed`는 강제로 verified=false(diagnostic-unjailed). 워커 기본값은 `--engine-jail docker`.
+- 2026-06-12 — v0.3.1: 결과 서명 기본은 Ed25519 비대칭(누구나 공개 키로 검증)으로 전환; HMAC은 운영자 내부 레거시로 유지. `sign_official_result`는 Ed25519 > HMAC > unsigned. 공개키 검증기와 HMAC 검증기는 서로 결과를 받아들이지 않는다.
+- 2026-06-12 — v0.3.1: verified 결과 기록 전에 공개 아티팩트를 비공개 팩 비밀 토큰과 대조하는 누출 스캐너(P0.8)를 강제한다; 누출 시 검증 거부. 공개 팩 토큰은 빼서 오탐을 막고, 누출 보고서는 비밀을 echo하지 않고 해시만 담는다.
+- 2026-06-12 — v0.3.1: 잡 클레임은 `BEGIN IMMEDIATE`로 원자적이며(다중 워커 안전), lease 만료 회수를 지원한다; DB 스키마는 데이터 손실 없이 가산 마이그레이션된다.
+- 2026-06-12 — v0.3.1: 리더보드/result show/official-result API는 공유 선택자 `select_best_verified_result`(final-tier 우선)를 써서 항상 같은 결과를 고른다.
+- 2026-06-12 — v0.3.1: Track B 호스티드 공식 경로(Option A) 구현 — 잡 종류 track_b_official_eval, 비공개 후보/베이스라인 스냅샷, verified 델타 Elo 리더보드. 검증된 토이 경로는 Docker opt-in.
+- 2026-06-12 — v0.3.1: 감옥 이미지에 빌드 툴체인(gcc/g++/make)을 추가(태그 0.4) — Python뿐 아니라 C/C++/네이티브 제출물도 감옥 안에서 from scratch 빌드·실행. 언어는 build.sh가 감옥 툴체인만으로 engine을 만들면 무엇이든 허용.
 - 2026-06-12 — v0.3: 엔진 감옥(engine jail)은 하니스 전체가 아니라 신뢰할 수 없는 엔진만 격리한다(워크스페이스 전용 마운트); 평가자는 호스트에서 신뢰된 채로 남아 숨겨진 팩을 읽는다 — 그래서 숨겨진 데이터는 jail 상태에서도 결코 엔진의 파일시스템에 존재하지 않는다.
 - 2026-06-12 — v0.3: 숨겨진 팩은 포지션을 `position fen ...` UCI 줄로 공급함으로써 jail과 결합한다; 팩 디렉터리는 결코 마운트되지 않는다. 이것이 `--eval-pack`이 `--engine-jail docker`와는 동작하지만 레거시 `--sandbox docker`와는 동작하지 않는 이유이다.
 - 2026-06-12 — v0.3: 산출물은 디렉터리별 매니페스트를 통한 예외적 공개 방식이다(기본은 거부); 정제된 피드백/공개 리포트만 공개된다. 누출 스캐너 테스트가 이를 강제한다.

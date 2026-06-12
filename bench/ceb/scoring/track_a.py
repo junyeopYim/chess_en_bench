@@ -99,9 +99,10 @@ def compute_round_score(match_reports, opponent_ratings=None, penalties=None):
 
 
 # Mode classification for leaderboard eligibility. "official" is the legacy
-# v0.2 record name for official rounds.
+# v0.2 record name for official rounds. final_production is the production
+# leaderboard mode; both final modes outrank official rounds.
 OFFICIAL_MODES = {"official", "official_round"}
-FINAL_MODES = {"final_eval"}
+FINAL_MODES = {"final_eval", "final_production"}
 
 
 def compute_leaderboard(results_dir, track="A", include_quick=False):

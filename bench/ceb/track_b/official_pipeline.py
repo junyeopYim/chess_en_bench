@@ -24,9 +24,11 @@ from pathlib import Path
 
 from ceb import paths
 from ceb.hosted.metadata import build_metadata, hash_directory
-from ceb.hosted.signing import sign_result
+from ceb.hosted.models import SCHEMA_TRACK_B_RESULT
+from ceb.hosted.signing import sign_official_result
 from ceb.sanitize import SanitizedError
 from ceb.scan.track_b_scan import scan_track_b
+from ceb.scan.leak_scan import scan_public_artifacts
 from ceb.storage import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC, write_artifact
 from ceb.track_b.round_runner import run_track_b_round, TrackBRoundError
 from ceb.track_b.stockfish import load_lock
@@ -67,11 +69,13 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
                          games=8, movetime_ms=100, max_plies=300,
                          run_id="track_b_official", round_number=1,
                          runs_root=None, root=None, verified=False,
+                         profile=None, verification_grade=None,
                          progress=lambda msg: None):
     """Run the source-first Track B pipeline. Returns the report dict.
 
     verified=True is reserved for the hosted worker; direct CLI use writes
-    verified=False (diagnostic).
+    verified=False (diagnostic). When an eval pack is supplied, public
+    artifacts are leak-scanned (P0.8) before the result is returned.
     """
     if root is None:
         root = paths.find_repo_root()
@@ -125,7 +129,7 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
     }
 
     report = {
-        "schema": "ceb.track_b.official_result/v1",
+        "schema": SCHEMA_TRACK_B_RESULT,
         "run_id": run_id,
         "track": "B",
         "round": round_number,
@@ -137,8 +141,22 @@ def run_official_track_b(*, candidate_src, baseline_src=None,
         "metadata": metadata,
         "verified": bool(verified),
     }
-    sign_result(report)
+    if profile is not None:
+        report["profile"] = profile
+    if verification_grade is not None:
+        report["verification_grade"] = verification_grade
+    sign_official_result(report)
     out_dir = runs_root / run_id / ("track_b_official_%d" % round_number)
     write_artifact(out_dir, "official_result.json", report, VISIBILITY_PUBLIC)
     write_artifact(out_dir, "scan_report.json", scan_report, VISIBILITY_PRIVATE)
+
+    # Public-artifact leak scan (P0.8) when a private opening pack was used.
+    if eval_pack_dir:
+        leak_report = scan_public_artifacts(out_dir, eval_pack_dir, root)
+        write_artifact(out_dir, "leak_scan.json", leak_report, VISIBILITY_PRIVATE)
+        if not leak_report["passed"]:
+            raise TrackBPipelineError(
+                "public artifact leak scan failed: a hidden opening-pack secret "
+                "would have been exposed; verification refused",
+                "track B leak scan failed: %s" % json.dumps(leak_report))
     return report

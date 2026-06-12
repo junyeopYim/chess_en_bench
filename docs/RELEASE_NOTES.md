@@ -3,6 +3,57 @@
 버전 번호는 패키지 버전이다(`pyproject.toml`, `bench/ceb/__init__.py`). 각 릴리스는
 이전 CLI 명령이 계속 동작하도록 유지한다.
 
+## v0.3.1 — 공식 호스트형 운영을 위한 하드닝
+
+테마: v0.3의 호스트형 MVP를 공개 공식 벤치마크로 운영해도 정직하게 신뢰할 수 있게
+강화한다. 핵심은 *우연히* verified가 만들어질 수 없게 하는 것이다.
+
+- **명시적 평가 프로파일** (`bench/ceb/hosted/profiles.py`): `smoke` / `official` /
+  `final-production`(레거시 `final-eval`). `smoke`(=`--quick-test-mode`)는 진단
+  전용으로 **절대 verified가 아니며** 호스트형 리더보드에 오르지 않고 감옥 없이
+  실행된다(CI 플러밍). `official` / `final-production`은 다른 모든 게이트가 통과할
+  때만 verified가 된다. 결과 JSON과 DB 행에 `profile`과 `verification_grade`
+  (`verified-official` / `verified-final-production` / `diagnostic-smoke` /
+  `diagnostic-unjailed` 등)가 기록된다.
+- **verified는 Docker 엔진 감옥을 요구한다**: verifiable 프로파일은 `engine_jail ==
+  docker`가 아니면 평가 전에 검증을 거부한다. 호스트형 워커의 `--engine-jail` 기본값은
+  이제 `docker`다. 개발 전용 `--dev-allow-unjailed`는 감옥 없이 실행하되 결과를 강제로
+  `verified: false`(diagnostic-unjailed)로 만든다.
+- **프로덕션 final eval 프로파일** (`final_production` 라운드 모드, `eval_profiles.yaml`):
+  상대당 336게임 × 6상대 = 2016게임, paired openings, movetime 1000ms로 의미 있는
+  신뢰구간을 만든다. CI는 이 기본값을 절대 실행하지 않는다(테스트는 tiny override).
+  리더보드는 final-tier(final_production/final_eval)를 official 라운드보다 선호한다.
+- **공유 결과 선택자** (`select_best_verified_result`): 리더보드 / `result show` /
+  `GET .../official-result`가 동일한 정책(final-tier 우선, smoke 제외)으로 같은 결과를
+  선택한다.
+- **원자적 잡 클레임** (`claim_next_job`, `BEGIN IMMEDIATE`): 다중 워커가 같은 잡을
+  중복 처리하지 않는다. `jobs`에 `worker_id`/`started_at`/`lease_expires_at`/
+  `attempt_count`/`public_detail` 추가, lease 만료 회수, 데이터 손실 없는 가산
+  마이그레이션.
+- **Track B 호스트형 공식 경로**(Option A): 잡 종류 `track_b_official_eval`,
+  `ceb hosted submit-track-b`, 워커 분기, verified Track B 델타 Elo 리더보드 항목.
+  verified는 감옥/스캔/diff 화이트리스트/동일 빌드 스크립트/비공개 오프닝 팩/누출
+  스캔/서명을 요구한다.
+- **감옥 빌드 툴체인**(이미지 `chess-en-bench-jail:0.4`): `gcc/g++/make`를 포함해
+  C/C++/네이티브 제출물이 감옥 안에서 빌드·실행된다(네트워크 없음). C++ 예제
+  `examples/submissions/minimal_uci_engine_cpp`가 strict 게이트를 통과한다.
+- **공개 아티팩트 누출 스캐너** (`bench/ceb/scan/leak_scan.py`): verified 결과 기록
+  전에 공개 아티팩트를 비공개 팩의 비밀 토큰과 대조해, 누출 시 검증을 거부하고 잡을
+  실패시키며 비공개 leak 보고서(비밀은 echo하지 않고 해시만)를 남긴다.
+- **Ed25519 공개키 서명**: 운영자는 비공개 키로 서명하고 누구나 게시된 공개 키로
+  검증한다. `ceb hosted keygen / sign-result --private-key / verify-result
+  --public-key`. 레거시 HMAC은 운영자 내부 용도로 유지된다. `cryptography`가 `hosted`
+  extra에 추가됨. (docs/RESULT_SIGNING.md)
+- **안전 업로드 전송**(`safe_extract_archive`): `.tar.gz`/`.tar`/`.zip` 업로드에서
+  심링크·절대 경로·경로 탐색·비정규·과대 파일을 거부한다. `ceb hosted submit
+  --archive`, 관리자 인증 `POST /api/hosted/runs/{id}/upload`.
+- **결과 번들 내보내기**: `ceb hosted result export`는 공개 아티팩트와 검증 지침만 담은
+  zip을 만든다(비공개 detail 없음).
+- **에이전트 궤적 스키마**(선택): `ceb.agent.trajectory/v1` — 비공개 사고 과정을
+  요구하지 않는 출처 메타데이터.
+- 스키마 버전 상향: 결과 `ceb.hosted.official_result/v2`, 리더보드
+  `ceb.hosted.leaderboard/v2`(검증기는 `v1`도 수용).
+
 ## v0.3.0 — 호스트형 공식 벤치마크 준비
 
 테마: 엔진은 평가기 내부나 hidden 데이터를 절대 읽어서는 안 된다. 공식 점수는 깨끗한

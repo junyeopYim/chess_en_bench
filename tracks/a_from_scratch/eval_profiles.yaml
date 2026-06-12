@@ -1,0 +1,38 @@
+# Track A hosted evaluation profiles.
+#
+# A *profile* is the operator-facing knob for the hosted worker. It selects a
+# round mode (match settings live in scoring.yaml `round_modes`) and decides
+# whether the result may be verified and may appear on the official hosted
+# leaderboard. The authoritative mapping is bench/ceb/hosted/profiles.py; this
+# file documents the production-scale settings and is read by the worker only
+# to confirm the configured floors. CI/tests use the `smoke` profile.
+#
+# verifiable=false  -> the result is diagnostic; never verified, never on the
+#                      official hosted leaderboard, regardless of anything else.
+# verifiable=true   -> the worker records verified=true ONLY when, in addition,
+#                      a private eval pack is mounted, the static scan passes,
+#                      the strict gate passes, the engine jail is docker, and
+#                      the result is signed.
+
+profiles:
+  smoke:                  # CI / plumbing only
+    round_mode: official_round
+    tiny_config: true     # forces the tiny QUICK_TEST match config
+    verifiable: false
+    verification_grade: diagnostic-smoke
+
+  official:               # standard verified official round
+    round_mode: official_round
+    verifiable: true
+    verification_grade: verified-official
+
+  final-production:       # production leaderboard CI (preferred by the leaderboard)
+    round_mode: final_production
+    verifiable: true
+    verification_grade: verified-final-production
+    # Production floors (also enforced in scoring.yaml round_modes.final_production).
+    # Raise these for a higher-confidence ranking; never lower them for an
+    # official public run.
+    min_total_games: 2000
+    paired_openings: true
+    confidence_interval: true

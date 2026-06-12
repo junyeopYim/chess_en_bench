@@ -1,6 +1,8 @@
-"""Tests for the engine jail (P0.1). Docker-dependent tests are opt-in."""
+"""Tests for the engine jail (P0.1) and the build-toolchain language policy
+(P0.7). Docker-dependent tests are opt-in (CEB_DOCKER_TESTS=1)."""
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from ceb.jail.engine_jail import EngineJailError, engine_command
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE = REPO_ROOT / "examples" / "submissions" / "minimal_uci_engine_python"
+EXAMPLE_CPP = REPO_ROOT / "examples" / "submissions" / "minimal_uci_engine_cpp"
 TINY_PACK = REPO_ROOT / "examples" / "eval_packs" / "tiny_private"
 
 
@@ -130,5 +133,40 @@ def test_gate_passes_with_jailed_engine():
     from ceb.gate.gate_runner import run_gate
 
     report = run_gate(EXAMPLE, root=REPO_ROOT, quick_match=False,
+                      engine_jail="docker")
+    assert report.passed, report.human_summary()
+
+
+# ----- C++ / build-toolchain language policy (P0.7) ---------------------------
+
+def test_cpp_example_is_source_only():
+    # The committed example is source + build.sh (no compiled binary, which the
+    # scanner would reject); the gate/jail builds ./engine at evaluation time.
+    names = {p.name for p in EXAMPLE_CPP.iterdir()}
+    assert names == {"engine.cpp", "build.sh"}, names
+
+
+@pytest.mark.skipif(shutil.which("g++") is None,
+                    reason="g++ not available to build the C++ example")
+def test_cpp_example_builds_and_passes_strict_gate_on_host(tmp_path):
+    from ceb.gate.gate_runner import run_gate
+
+    workspace = tmp_path / "cpp"
+    shutil.copytree(EXAMPLE_CPP, workspace)
+    report = run_gate(workspace, root=REPO_ROOT, quick_match=False, strict=True)
+    assert report.passed, report.human_summary()
+
+
+@pytest.mark.skipif(not _jail_image_ready(),
+                    reason="set CEB_DOCKER_TESTS=1 with docker + jail image "
+                           "built to run jail integration tests")
+def test_cpp_example_builds_and_passes_strict_gate_in_jail(tmp_path):
+    # The jail image must carry a C/C++ toolchain so a compiled submission can
+    # build (writable /submission, no network) and then play strict-gated.
+    from ceb.gate.gate_runner import run_gate
+
+    workspace = tmp_path / "cpp"
+    shutil.copytree(EXAMPLE_CPP, workspace)
+    report = run_gate(workspace, root=REPO_ROOT, quick_match=False, strict=True,
                       engine_jail="docker")
     assert report.passed, report.human_summary()

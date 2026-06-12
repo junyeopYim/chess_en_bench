@@ -74,7 +74,7 @@ ceb track-b round run \
 테스트 전용으로만 존재한다.
 
 `--engine-jail docker`는 신뢰할 수 없는 **후보** 엔진만 Docker 감옥(engine jail,
-`chess-en-bench-jail:0.3`)에 가둔다. 베이스라인은 호스트에서 신뢰된 상태로
+`chess-en-bench-jail:0.4`)에 가둔다. 베이스라인은 호스트에서 신뢰된 상태로
 실행된다. 이 경우 후보는 자신의 워크스페이스 디렉터리 안의 단일 실행 파일이어야
 한다. `--runner fastchess`는 대량 매치를 위해 선택적 fastchess 백엔드
 (`bench/ceb/match/fastchess_runner.py`)로 교체한다. `internal` 러너가 기본이자

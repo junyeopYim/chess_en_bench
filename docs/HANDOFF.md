@@ -1,63 +1,53 @@
 # 핸드오프
 
 ## 목표
-chess_en_bench v0.3: 호스티드 공식 벤치마크 준비 상태. 공식 점수는 깨끗한
-스냅샷, 비공개 평가 팩, 격리된 엔진 감옥(engine jail), 재현 가능한 서명된
-메타데이터, 통계적으로 의미 있는 평가로부터 호스티드 평가자 워커만이
-생성한다. 신뢰할 수 없는 엔진은 평가자 내부나 숨겨진 데이터를 결코 읽을 수
-없다.
+chess_en_bench v0.3.1 — 공식 호스팅형 벤치마크 하드닝. 검증된 점수는 오직 공식
+워커가, 깨끗한 스냅샷 + 비공개 평가 팩 + 정적 스캔 + 엄격 게이트 + Docker 엔진
+감옥 + `official`/`final-production` 프로파일 + 공개 누출 스캔 + 서명을 모두
+만족할 때만 생성한다. *우연한* verified는 불가능하다.
 
-## 현재 상태 (브랜치 v0.3-hosted-benchmark)
-모든 P0와 P1 항목이 구현되고 테스트됨.
+## 현재 상태 (브랜치 v0.3.1-official-hosted-hardening)
+모든 P0와 대부분의 P1이 구현·테스트됨.
 
 P0:
-- 엔진 감옥(`bench/ceb/jail/`): `--engine-jail docker`는 엔진만 가둔다 —
-  워크스페이스 전용 읽기 전용 마운트, repo/팩/상대 마운트 없음,
-  network-none, 읽기 전용 루트, 리소스 제한, 비루트, 재귀 가드.
-- 숨겨진 평가 팩 + jail이 안전하게 결합됨(팩은 호스트 측에서 읽으며 결코 마운트되지 않음).
-- 산출물 가시성 모델(`bench/ceb/storage/`): 공개 `feedback.json` /
-  `report.public.json`; 비공개 전체 리포트/로그; 디렉터리별 매니페스트.
-- 숨김 안전 오류(`bench/ceb/sanitize.py`, `hidden=` 로더); CLI는 트레이스백/
-  비밀을 출력하지 않음(운영자는 `CEB_DEBUG=1`).
-- 호스티드 파이프라인(`bench/ceb/hosted/`, SQLite + 스토어): 스냅샷, 잡,
-  공식 워커 = `verified: true`의 유일한 출처. 비공개 팩이 없거나 / 스캔 실패
-  시 / strict 게이트 실패 시 검증을 거부한다.
-- 재현성 메타데이터 + HMAC-SHA256 서명(`CEB_SIGNING_KEY`; 그 외에는 명시적
-  `unsigned`).
-- 평가 모드 quick / official_round / final_eval에 CI 필드 포함; 리더보드는
-  final_eval을, 그 다음 공식 라운드를 선호하며 quick은 결코 선호하지 않음.
-- 부정행위 방지 스캐너(`bench/ceb/scan/`): `ceb scan workspace|track-b`.
-- 기본 거부 방식의 공개 산출물 제공과 `CEB_ADMIN_TOKEN`으로 게이트된 POST를
-  갖춘 호스티드 API 엔드포인트.
+- (P0.1) verifiable 프로파일은 `engine_jail == docker`가 아니면 평가 전에 검증을
+  거부. 워커 `--engine-jail` 기본값 docker. `--dev-allow-unjailed`는 강제로
+  verified=false(diagnostic-unjailed).
+- (P0.2/P0.3) 프로파일 `smoke`/`official`/`final-production`
+  (`bench/ceb/hosted/profiles.py`). smoke는 절대 verified 아님·리더보드 제외.
+  `final_production` 라운드 모드 = 2016게임/paired/movetime 1000ms. 결과·DB에
+  `profile`·`verification_grade` 기록.
+- (P0.4) 공유 선택자 `select_best_verified_result`: 리더보드/`result show`/
+  official-result API가 동일 결과 선택(final-tier 우선).
+- (P0.5) `claim_next_job`(BEGIN IMMEDIATE) 원자적 클레임 + lease 회수 +
+  worker_id/attempt_count/public_detail + 가산 마이그레이션.
+- (P0.6) Track B 호스팅형(Option A): 잡 `track_b_official_eval`,
+  `ceb hosted submit-track-b`, 워커 분기, verified track B 리더보드.
+- (P0.7) 감옥 이미지에 빌드 툴체인(`chess-en-bench-jail:0.4`); C++ 예제
+  `examples/submissions/minimal_uci_engine_cpp`가 strict 게이트 통과.
+- (P0.8) 공개 아티팩트 누출 스캐너(`bench/ceb/scan/leak_scan.py`); 누출 시 검증
+  거부 + 비공개 leak 보고서(해시만).
+- (P0.9) Ed25519 공개키 서명 + `keygen`/`sign-result`/`verify-result`; HMAC 레거시.
+- (P0.10) 문서 갱신(README, 이 파일, HOSTED_*, SECURITY_MODEL, RESULT_SIGNING,
+  LEADERBOARD_GOVERNANCE, TRACK_B_OFFICIAL_PIPELINE, RELEASE_NOTES).
 
-P1:
-- 선택적 fastchess 어댑터(`--runner fastchess`).
-- Track B 소스 우선 파이프라인(`ceb track-b official run`).
-- 무승부 판정: 3회 동형 반복, 불충분한 기물, 설정 가능한 하프무브 임계값.
-- 라운드 설정에 연결된 Stockfish UCI_Elo 앵커(우아하게 건너뜀;
-  호스티드의 경우 `anchors_required`).
+P1: (P1.2) 안전 업로드 `safe_extract_archive` + `submit --archive` + 업로드 API.
+(P1.3) `ceb hosted result export` 공개 번들. (P1.4) 에이전트 궤적 스키마.
 
 ## 테스트 결과
-- `pytest -q`: 180 passed, 3 skipped (Docker 통합 — `CEB_DOCKER_TESTS=1`로
-  옵트인; 이미지를 빌드해 로컬에서 검증: 15개 docker 테스트
-  통과, jailed 게이트 + jailed 라운드 + 호스티드 워커 모두 정상).
-- 수용 + 호스티드 스모크 + Track B 토이 명령: 모두 종료 코드 0.
+- `python -m pip install -e ".[dev,server,hosted]"` 성공.
+- `pytest -q`: **214 passed, 5 skipped**(Docker 통합 opt-in).
+- `CEB_DOCKER_TESTS=1`(jail 이미지 빌드 후): jail/Track B verified/C++-in-jail
+  테스트 포함 23 passed. verified Track A 경로를 수동 검증: verified=true, Ed25519
+  서명, 누출 스캔 통과, 공개 키로 authentic=true.
 
 ## 알려진 한계
-- 결과 서명은 대칭(HMAC)이다; 공개키 증명은 향후 작업이다.
-- Track B 공식 파이프라인은 트리별 `ceb_build.sh`를 통해 빌드한다; 실제
-  고정된 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자가
-  제공한다(docs/TRACK_B_OFFICIAL_PIPELINE.md에 문서화됨).
-- fastchess 어댑터는 결함을 결과에 접어 넣으며(결함별 귀속 없음) 아직 오라클
-  PGN 사후 검증이 없다.
-- 호스티드 백엔드는 SQLite + 로컬 FS이다(단일 노드 MVP); 관리자 토큰을 넘는
-  인증 없음, 업로드 전송 없음(제출물은 서버 로컬 경로).
-- `--eval-pack`은 레거시 `--sandbox docker` 모드에서 의도적으로 지원되지
-  않는다; 대신 `--engine-jail docker`를 사용한다.
+- 검증된 Track B end-to-end(감옥 내 빌드+매치)와 C++-in-jail 게이트는 opt-in
+  Docker 테스트다(CI는 비-docker 가드/진단 경로 + 호스트 g++ C++ 게이트로 커버).
+- fastchess 어댑터는 아직 오라클 PGN 사후 검증이 없어 공식 검증 경로 밖이다(P1.1).
+- 실제 고정 Stockfish 빌드 래퍼와 `bench`/속도 검사는 운영자 단계다.
+- 호스팅형 백엔드는 SQLite + 로컬 FS(단일 노드)이며 관리자 토큰 외 인증은 없다.
 
 ## 다음 단계
-- 비대칭(공개키) 결과 서명 + 공개된 검증 키.
-- Track B 공식 파이프라인에서 실제 고정된 Stockfish 빌드 래퍼 + `bench`
-  검사; Track B 잡을 위해 호스티드 워커에 연결.
-- 호스티드 제출을 위한 업로드 전송 + 인증; 다중 워커 큐.
-- fastchess PGN → 오라클 사후 검증.
+- P1.1 fastchess PGN→오라클 사후 검증(통과해야 공식 경로 편입).
+- 다중 노드 큐/객체 저장소, 키 회전, 공개 키 배포 채널 문서화.

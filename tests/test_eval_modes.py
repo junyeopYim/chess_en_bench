@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from ceb.rounds.round_runner import (
-    MODE_FINAL, MODE_OFFICIAL, MODE_QUICK, run_round)
+    DEFAULT_ROUND_MODES, MODE_FINAL, MODE_FINAL_PRODUCTION, MODE_OFFICIAL,
+    MODE_QUICK, run_round)
 from ceb.scoring.track_a import compute_leaderboard
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +82,40 @@ def test_leaderboard_falls_back_to_official_then_excludes_quick(tmp_path):
     assert official["entries"][0]["score"] == 850.0
     diagnostic = compute_leaderboard(tmp_path, include_quick=True)
     assert diagnostic["entries"][0]["score"] == 2000.0
+
+
+def test_final_production_mode_is_production_scale():
+    # P0.3: the production profile must default to a leaderboard-quality game
+    # count (>= 2000 total across the opponent pool), separate from CI/smoke.
+    cfg = DEFAULT_ROUND_MODES[MODE_FINAL_PRODUCTION]
+    total_games = len(cfg["opponents"]) * cfg["games_per_opponent"]
+    assert total_games >= 2000, total_games
+    assert cfg["movetime_ms"] >= 1000
+
+
+def test_final_production_runs_strict_and_is_final_tier(tmp_path):
+    # Exercised with a tiny override (the configured defaults must NEVER run in
+    # CI); it is strict, final-tier, and consumes no official budget.
+    report, _, state = run_round(EXAMPLE, 1, mode=MODE_FINAL_PRODUCTION,
+                                 run_id="fp", runs_root=tmp_path,
+                                 mode_config=TINY)
+    assert report["mode"] == "final_production"
+    assert report["strict_gate"] is True
+    assert state.budget_used == 0  # final tiers never consume budget
+
+    run_dir = tmp_path / "fp"
+    (run_dir / "state.json").write_text(json.dumps({
+        "schema": "ceb.run.state/v1", "run_id": "fp", "track": "A",
+        "gate": {"passed": True},
+        "rounds": [
+            {"round": 1, "mode": "official_round", "score": 1500.0},
+            {"round": 2, "mode": "final_production", "score": 900.0},
+        ],
+    }))
+    board = compute_leaderboard(tmp_path)
+    entry = next(e for e in board["entries"] if e["run_id"] == "fp")
+    assert entry["best_round"]["mode"] == "final_production"
+    assert entry["score"] == 900.0  # final-tier outranks the higher official
 
 
 def test_legacy_official_mode_still_counts(tmp_path):

@@ -53,7 +53,7 @@ Track A 라운드는 세 가지 모드 중 하나로 실행된다(`tracks/a_from
 서로 다른 두 격리 메커니즘이 존재하며 교체 사용할 수 없다:
 
 - **엔진 감옥**(`--engine-jail docker`, `bench/ceb/jail/`,
-  `infra/docker/engine_jail.Dockerfile`, 태그 `chess-en-bench-jail:0.3`).
+  `infra/docker/engine_jail.Dockerfile`, 태그 `chess-en-bench-jail:0.4`).
   **오직** 신뢰할 수 없는 엔진만 가둔다. 평가자는 호스트에서 신뢰된 상태로 남아 비공개 팩을
   읽고 오라클과 채점을 실행한다. 엔진은 `/submission`에 읽기 전용으로 마운트된 자신의
   워크스페이스만 보며, `--network none`, 읽기 전용 루트 + tmpfs `/tmp`,
@@ -156,7 +156,7 @@ Track A 라운드는 세 가지 모드 중 하나로 실행된다(`tracks/a_from
 | `docs/` | 이 문서 |
 | `scripts/` | `setup_dev.sh`, `setup_stockfish.sh`, `run_public_gate.sh`, `build_evaluator_image.sh`, `build_jail_image.sh` |
 | `examples/` | `submissions/`(동작하는 + 망가진 엔진), `eval_packs/tiny_private/`(테스트에서 쓰는 가짜 데모 팩) |
-| `infra/docker/` | `engine_jail.Dockerfile`(감옥 이미지, 태그 `chess-en-bench-jail:0.3`)와 `evaluator.Dockerfile`(레거시 샌드박스 이미지) |
+| `infra/docker/` | `engine_jail.Dockerfile`(감옥 이미지, 태그 `chess-en-bench-jail:0.4`)와 `evaluator.Dockerfile`(레거시 샌드박스 이미지) |
 | `.github/workflows/ci.yml` | Python 3.10–3.12에서의 CI: pytest, doctor, gate, quick-round 스모크, scan, 호스팅형 SQLite 스모크, Track B 토이 라운드(Stockfish, Docker, 클라우드 없음) |
 | `web/static/` | `ceb server start`가 제공하는 대시보드 프런트엔드 |
 | `tests/` | pytest 스위트(180 passed + 3 skipped; Docker 통합 테스트는 `CEB_DOCKER_TESTS=1`로 opt-in) |

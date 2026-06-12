@@ -1,10 +1,13 @@
 """Round execution: gate precondition, budget accounting, matches, scoring.
 
-Eval modes (P0.6):
-  quick           tiny, free, diagnostic; non-strict gate
-  official_round  consumes one unit of the official round budget; strict gate
-  final_eval      leaderboard-quality evaluation; strict gate; does not
-                  consume round budget (hosted policy decides when it runs)
+Eval modes:
+  quick             tiny, free, diagnostic; non-strict gate
+  official_round    consumes one unit of the official round budget; strict gate
+  final_eval        leaderboard-quality evaluation; strict gate; does not
+                    consume round budget (hosted policy decides when it runs)
+  final_production  production-scale final eval (thousands of games, paired
+                    openings) for a public leaderboard CI; strict gate; no
+                    budget cost; configured in eval_profiles.yaml
 
 Official-grade modes draw start positions from the resolved eval pack
 (public + optional operator-mounted hidden pack) and rotate openings across
@@ -39,10 +42,18 @@ from ceb.storage import (
 MODE_QUICK = "quick"
 MODE_OFFICIAL = "official_round"
 MODE_FINAL = "final_eval"
-EVAL_MODES = (MODE_QUICK, MODE_OFFICIAL, MODE_FINAL)
+# final_production: leaderboard-quality production evaluation. Substantially
+# larger than final_eval (thousands of games, paired openings) so the
+# delta-Elo confidence interval is tight enough for a public ranking. NEVER
+# run by CI/tests with its configured defaults — tests pass a tiny
+# mode_config override. See tracks/a_from_scratch/eval_profiles.yaml.
+MODE_FINAL_PRODUCTION = "final_production"
+EVAL_MODES = (MODE_QUICK, MODE_OFFICIAL, MODE_FINAL, MODE_FINAL_PRODUCTION)
 
 # Modes that consume one unit of the official round budget.
 _BUDGET_MODES = {MODE_OFFICIAL}
+# Final-tier modes (leaderboard prefers these over official rounds).
+FINAL_MODES = (MODE_FINAL, MODE_FINAL_PRODUCTION)
 # Legacy v0.2 records used "official" for official rounds.
 LEGACY_OFFICIAL = "official"
 
@@ -69,6 +80,18 @@ DEFAULT_ROUND_MODES = {
         "movetime_ms": 200,
         "max_plies": 200,
         "openings_limit": 8,
+    },
+    # Production final eval. 6 opponents x 336 games = 2016 games total, with
+    # paired openings (the internal runner alternates colours per pair). These
+    # defaults are the floor for a credible leaderboard CI; operators raise
+    # them via tracks/a_from_scratch/eval_profiles.yaml. Do NOT run in CI.
+    MODE_FINAL_PRODUCTION: {
+        "opponents": ["BenchRandom", "BenchGreedyCapture", "BenchMaterial1",
+                      "BenchPST1", "BenchMiniMax2", "BenchAlphaBeta3"],
+        "games_per_opponent": 336,
+        "movetime_ms": 1000,
+        "max_plies": 300,
+        "openings_limit": 24,
     },
 }
 

@@ -174,7 +174,7 @@ extra). 권위 있는, 검증된 순위는 7절과 `docs/LEADERBOARD_GOVERNANCE.
 유지된다. 한 번 빌드한다:
 
 ```bash
-bash scripts/build_jail_image.sh                 # tag chess-en-bench-jail:0.3
+bash scripts/build_jail_image.sh                 # tag chess-en-bench-jail:0.4
 ceb round run --track A --workspace <dir> --round 1 --eval-pack <pack> --engine-jail docker
 ```
 
@@ -198,16 +198,20 @@ Docker가 없거나 이미지가 없으면 조치 가능한 `EngineJailError`가
 ## 7. 호스티드 공식 평가 (권위 있는 경로)
 
 호스티드 파이프라인(`bench/ceb/hosted/`)은 `verified: true` 결과를 산출하는
-유일한 경로다. MVP다: 단일 노드, SQLite + 로컬 `<db>_store/` 객체 디렉터리,
-대칭(운영자 전용) 서명, 서버 로컬 제출 경로.
+유일한 경로다. 기본 백엔드는 단일 노드(SQLite + 로컬 `<db>_store/` 객체
+디렉터리)이지만 다중 워커에 안전한 원자적 잡 클레임(`claim_next_job`,
+`BEGIN IMMEDIATE`)을 갖추며, 서명은 Ed25519 공개키(권장)다. 평가
+**프로파일**(`smoke`/`official`/`final-production`)이 결과가 검증될 자격을
+결정한다 — `smoke`는 절대 verified가 아니다.
 
 ```bash
 bash scripts/build_jail_image.sh                       # jail image, once
+ceb hosted keygen --private-key op.pem --public-key op.pub.pem   # Ed25519 (once)
 
 ceb hosted init   --db runs/hosted.sqlite
 ceb hosted submit --track A --workspace <dir> --run-id myrun --db runs/hosted.sqlite
-ceb hosted worker run-once --db runs/hosted.sqlite \
-    --eval-pack <private-pack> --engine-jail docker [--final-eval] [--quick-test-mode]
+CEB_SIGNING_PRIVATE_KEY=op.pem ceb hosted worker run-once --db runs/hosted.sqlite \
+    --eval-pack <private-pack> --profile official    # --engine-jail docker is the default
 ceb hosted result show --run-id myrun --db runs/hosted.sqlite
 ceb hosted leaderboard --track A --db runs/hosted.sqlite
 ```
@@ -219,24 +223,28 @@ ceb hosted leaderboard --track A --db runs/hosted.sqlite
    스냅샷을 트리 해시한다(`bench/ceb/hosted/submissions.py`). 워커는 라이브
    워크스페이스가 아니라 항상 스냅샷만 평가한다 — 이는 평가된 대상을
    고정하고 제출 후 편집을 차단한다. 작업(`official_eval`)이 큐에 추가된다.
-2. **워커(Worker).** `ceb hosted worker run-once`는 가장 오래된 큐 작업을
-   빼내어 `run_official_eval`(`bench/ceb/hosted/official_eval.py`)을 실행한다:
-   정적 스캔(`ceb.scan.workspace/v1`) → 비공개 팩에 대한 엄격 게이트 →
-   비공개 팩과 선택적 엔진 감옥으로 `official_round`(또는 `--final-eval`이면
-   `final_eval`) → 공개/비공개 아티팩트 → 재현성 메타데이터 + 서명 →
-   검증된 결과. `--quick-test-mode`는 CI/스모크용 작은 토이 설정으로
-   교체한다(프로파일은 결과에 기록됨).
-3. **검증 거부.** 비공개 eval 팩이 없거나, 정적 스캔이 실패하거나, 엄격
-   게이트가 실패하면 워커는 검증된 결과를 **전혀** 기록하지 않는다. 이런
-   경우 작업은 정제된(sanitized) 사유와 함께 실패로 표시되고 실행은 검증된
-   결과를 얻지 못한다.
+2. **워커(Worker).** `ceb hosted worker run-once`는 큐 작업을 **원자적으로
+   클레임**(`claim_next_job`)하고 작업 종류로 분기한다. Track A
+   (`official_eval`)는 `run_official_eval`을 실행한다: 비공개 팩 필수 →
+   **엔진 감옥 가드**(verifiable 프로파일은 `engine_jail == docker`가 아니면
+   평가 전 거부) → 정적 스캔(`ceb.scan.workspace/v1`) → 비공개 팩에 대한 엄격
+   게이트 → 비공개 팩 + Docker 엔진 감옥으로 라운드 → 공개/비공개 아티팩트 →
+   **공개 아티팩트 누출 스캔**(`ceb.scan.leak/v1`) → 메타데이터 + 서명 →
+   검증된 결과. `smoke` 프로파일(=`--quick-test-mode`)은 작은 토이 설정이며
+   절대 verified가 아니다(프로파일·등급은 결과에 기록됨).
+3. **검증 거부.** 비공개 eval 팩이 없거나, 감옥이 docker가 아니거나(개발 플래그
+   없이), 정적 스캔이 실패하거나, 엄격 게이트가 실패하거나, 누출이 탐지되면
+   워커는 검증된 결과를 **전혀** 기록하지 않는다. 작업은 정제된 공개 사유와
+   비공개 사유를 함께 담아 실패로 표시된다.
 4. **검증된 결과.** 성공 시 워커는 점수, 정제된 피드백, 메타데이터 블록,
-   서명을 담은 `official_result.json`(`ceb.hosted.official_result/v1`, 공개
-   아티팩트)을 기록한다. 결과를 DB에 `verified: true`로 기록하고 각
-   아티팩트의 가시성을 API 서빙용으로 등록한다.
+   서명, `profile`/`verification_grade`를 담은 `official_result.json`
+   (`ceb.hosted.official_result/v2`, 공개 아티팩트)을 기록한다. 결과를 DB에
+   `verified: true`로 기록하고 각 아티팩트의 가시성을 API 서빙용으로
+   등록한다. 리더보드/`result show`/official-result API는 공유 선택자
+   `select_best_verified_result`(final-tier 우선)로 동일 결과를 고른다.
 
 **재현성 메타데이터**(`bench/ceb/hosted/metadata.py`)는 `benchmark_version`
-(0.3.0), `git_commit`, 평가기와 엔진 감옥 이미지 다이제스트,
+(0.3.1), `git_commit`, 평가기와 엔진 감옥 이미지 다이제스트,
 `eval_pack_id`, `eval_pack_hash`(팩 디렉터리의 sha256),
 `opponent_pool_hash`(`opponents.py`의 sha256), `opening_suite_hash`, 하드웨어
 (cpu 모델/코어, 메모리 제한), 소프트웨어(python, platform, compiler,
@@ -244,12 +252,14 @@ fastchess, `stockfish_baseline: sf_18/cb3d4ee`), `random_seed`, `verified`를
 기록한다. 로컬에서 판별할 수 없는 필드는 명시적 null이다.
 
 **서명**(`bench/ceb/hosted/signing.py`)은 정규 직렬화(canonical
-serialization)에 대한 HMAC-SHA256이며, `CEB_SIGNING_KEY`로 키잉된다. 이는
-**대칭**이다 — 키 보유자만 검증할 수 있으며, 공개 키 증명(public-key
-attestation)이 아니다. 키가 없으면 결과는 명시적인 "NO cryptographic
-authenticity" 메모와 함께 `signature.status = "unsigned"`로 기록되며,
-`ceb hosted verify-result`는 `authentic: false`를 반환한다. 변조된 결과나
-잘못된 키는 불일치로 검증된다.
+serialization)에 대해 이뤄진다. 권장 알고리즘은 **Ed25519 비대칭 서명**으로,
+운영자는 비공개 키로 서명하고 **누구나** 게시된 공개 키로 진정성을 독립
+검증한다(`ceb hosted verify-result --public-key`). 레거시 대칭 HMAC-SHA256
+(`CEB_SIGNING_KEY`)은 운영자 내부 용도로 유지된다. `sign_official_result`는
+Ed25519 > HMAC > unsigned 순으로 선택한다. 키가 없으면 결과는 명시적인 "NO
+cryptographic authenticity" 메모와 함께 `signature.status = "unsigned"`로
+기록되며 결코 진정한 것으로 취급되지 않는다. 변조된 결과나 잘못된 키는 불일치로
+검증된다. 자세한 내용은 `docs/RESULT_SIGNING.md`를 참조한다.
 
 ```bash
 ceb hosted sign-result   --result <official_result.json>   # re-sign with CEB_SIGNING_KEY

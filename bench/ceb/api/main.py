@@ -18,7 +18,7 @@ import os
 import re
 
 try:
-    from fastapi import FastAPI, Header, HTTPException
+    from fastapi import FastAPI, Header, HTTPException, Request
     from fastapi.responses import FileResponse, HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel
@@ -153,11 +153,59 @@ def hosted_submit(run_id: str, payload: SubmissionCreate,
         if not hosted_db.get_run(conn, run_id):
             raise HTTPException(status_code=404, detail="run not found")
         store = hosted_db.store_dir(_hosted_db_path())
-        dest = store / run_id / "snapshots" / ("submission_%d" % int(_time.time()))
+        import uuid as _uuid
+        dest = store / run_id / "snapshots" / (
+            "submission_%d_%s" % (int(_time.time()), _uuid.uuid4().hex[:8]))
         try:
             snapshot, tree_hash = snapshot_workspace(payload.workspace, dest)
         except SubmissionError as exc:
             raise HTTPException(status_code=400, detail=exc.public_message)
+        submission_id = hosted_db.add_submission(conn, run_id, snapshot, tree_hash)
+        return {"submission_id": submission_id, "tree_hash": tree_hash}
+    finally:
+        conn.close()
+
+
+_MAX_UPLOAD_BYTES = 200 * 1024 * 1024  # 200 MiB
+
+
+@app.post("/api/hosted/runs/{run_id}/upload")
+async def hosted_upload(run_id: str, request: Request,
+                        filename: str = "workspace.tar.gz",
+                        x_ceb_admin_token: str = Header(default=None)):
+    """Admin-only safe upload: POST a .tar.gz/.tar/.zip body; the server
+    extracts it (rejecting symlinks/traversal/absolute paths/oversized) and
+    snapshots + hashes the result (P1.2)."""
+    _require_admin(x_ceb_admin_token)
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.submissions import snapshot_workspace, SubmissionError
+    from ceb.hosted.upload import safe_extract_archive, UploadError
+    import time as _time, tempfile
+
+    if "/" in filename or ".." in filename or not _ARTIFACT_ID_RE.match(filename):
+        raise HTTPException(status_code=400, detail="bad filename")
+    body = await request.body()
+    if len(body) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="upload too large")
+
+    conn = _hosted_conn()
+    try:
+        if not hosted_db.get_run(conn, run_id):
+            raise HTTPException(status_code=404, detail="run not found")
+        store = hosted_db.store_dir(_hosted_db_path())
+        import uuid as _uuid
+        stamp = "%d_%s" % (int(_time.time()), _uuid.uuid4().hex[:8])
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, filename)
+            with open(archive_path, "wb") as fh:
+                fh.write(body)
+            extract_dest = store / run_id / "uploads" / ("upload_%s" % stamp)
+            try:
+                workspace = safe_extract_archive(archive_path, extract_dest)
+                dest = store / run_id / "snapshots" / ("submission_%s" % stamp)
+                snapshot, tree_hash = snapshot_workspace(workspace, dest)
+            except (UploadError, SubmissionError) as exc:
+                raise HTTPException(status_code=400, detail=exc.public_message)
         submission_id = hosted_db.add_submission(conn, run_id, snapshot, tree_hash)
         return {"submission_id": submission_id, "tree_hash": tree_hash}
     finally:
@@ -232,10 +280,11 @@ def hosted_official_result(run_id: str):
     from ceb.hosted import db as hosted_db
     conn = _hosted_conn()
     try:
-        results = hosted_db.results_for_run(conn, run_id, verified_only=True)
-        if not results:
+        # Same shared selector the leaderboard uses, so the official result a
+        # run advertises always matches its leaderboard entry (P0.4).
+        best = hosted_db.select_best_verified_result(conn, run_id)
+        if not best:
             raise HTTPException(status_code=404, detail="no verified result")
-        best = results[-1]
         try:
             result = json.loads(open(best["result_path"], encoding="utf-8").read())
         except (OSError, ValueError):

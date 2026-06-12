@@ -58,12 +58,25 @@ def test_hosted_cli_smoke(tmp_path, capsys):
     assert main(["hosted", "submit", "--track", "A", "--workspace", example,
                  "--run-id", "cli_hosted", "--db", db]) == 0
     capsys.readouterr()
+    # Smoke profile (quick-test-mode): diagnostic, never verified, never on
+    # the hosted leaderboard.
     assert main(["hosted", "worker", "run-once", "--db", db,
                  "--eval-pack", pack, "--quick-test-mode"]) == 0
-    assert '"verified": true' in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert '"verified": false' in out
+    assert '"profile": "smoke"' in out
     assert main(["hosted", "leaderboard", "--db", db, "--track", "A"]) == 0
     out = capsys.readouterr().out
-    assert "cli_hosted" in out and "verified results only" in out
+    assert "verified results only" in out
+    assert "no verified results" in out  # smoke excluded
+    # The official-round profile without --engine-jail docker refuses to verify.
+    assert main(["hosted", "submit", "--track", "A", "--workspace", example,
+                 "--run-id", "cli_hosted", "--db", db]) == 0
+    capsys.readouterr()
+    assert main(["hosted", "worker", "run-once", "--db", db,
+                 "--eval-pack", pack, "--profile", "official",
+                 "--engine-jail", "none"]) == 2
+    assert "docker" in capsys.readouterr().out
 
 
 def test_doctor_runs(capsys):

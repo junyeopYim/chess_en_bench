@@ -21,7 +21,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev,server]"
+          python -m pip install -e ".[dev,server,hosted]"
 
       - name: Tests
         run: pytest -q
@@ -34,6 +34,11 @@ jobs:
 
       - name: Strict gate (example engine)
         run: ceb gate run --track A --workspace examples/submissions/minimal_uci_engine_python --strict --no-match
+
+      - name: Strict gate (C++ example; compiled language policy)
+        run: |
+          cp -R examples/submissions/minimal_uci_engine_cpp /tmp/cpp_ws
+          ceb gate run --track A --workspace /tmp/cpp_ws --strict --no-match
 
       - name: Anti-cheating scan (example engine)
         run: ceb scan workspace --track A --workspace examples/submissions/minimal_uci_engine_python
@@ -51,14 +56,30 @@ jobs:
           ceb leaderboard compute --track A --results runs
           ceb leaderboard compute --track A --results runs --include-quick
 
-      - name: Hosted SQLite smoke (verified result + leaderboard)
+      - name: Hosted SQLite smoke (diagnostic only; never verified)
         run: |
           rm -rf runs/hosted_ci.sqlite runs/hosted_ci_store
           ceb hosted init --db runs/hosted_ci.sqlite
           ceb hosted submit --track A --workspace examples/submissions/minimal_uci_engine_python --run-id ci_hosted --db runs/hosted_ci.sqlite
+          # smoke profile: diagnostic, never verified, never on the leaderboard
           ceb hosted worker run-once --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --quick-test-mode
           ceb hosted result show --run-id ci_hosted --db runs/hosted_ci.sqlite
           ceb hosted leaderboard --db runs/hosted_ci.sqlite --track A
+
+      - name: Hosted verification guard (official profile refuses without docker jail)
+        run: |
+          ceb hosted submit --track A --workspace examples/submissions/minimal_uci_engine_python --run-id ci_guard --db runs/hosted_ci.sqlite
+          # Must FAIL (exit 2) before evaluating: a verifiable profile needs the docker jail.
+          if ceb hosted worker run-once --db runs/hosted_ci.sqlite --eval-pack examples/eval_packs/tiny_private --profile official --engine-jail none; then
+            echo "ERROR: official profile produced a result without the engine jail"; exit 1
+          fi
+
+      - name: Result signing (Ed25519 keygen + sign + verify)
+        run: |
+          ceb hosted keygen --private-key /tmp/ceb_priv.pem --public-key /tmp/ceb_pub.pem
+          RES=$(find runs/hosted_ci_store -name official_result.json | head -1)
+          ceb hosted sign-result --result "$RES" --private-key /tmp/ceb_priv.pem
+          ceb hosted verify-result --result "$RES" --public-key /tmp/ceb_pub.pem
 
       - name: Track B toy round
         run: |
@@ -71,6 +92,8 @@ jobs:
         run: python -c "from ceb.api.main import app; print(app.title)"
 
       # Docker engine-jail / sandbox integration tests are skipped here
-      # (no daemon / image in default CI); run locally with:
+      # (no daemon / image in default CI). They cover the VERIFIED official path
+      # (Track A + Track B) and the C++-in-jail build. Run locally with:
       #   bash scripts/build_jail_image.sh
-      #   CEB_DOCKER_TESTS=1 pytest tests/test_engine_jail.py tests/test_sandbox_docker.py
+      #   CEB_DOCKER_TESTS=1 pytest tests/test_engine_jail.py \
+      #       tests/test_sandbox_docker.py tests/test_track_b_official.py

@@ -397,15 +397,29 @@ def cmd_hosted_submit(args):
     if str(args.track).upper() != "A":
         _print("hosted submissions currently support track A only")
         return 2
+    if bool(args.workspace) == bool(args.archive):
+        _print("pass exactly one of --workspace <dir> or --archive <file>")
+        return 2
     conn = hosted_db.connect(args.db)
     try:
         if hosted_db.get_run(conn, args.run_id) is None:
             hosted_db.create_run(conn, args.run_id, args.track)
         store = hosted_db.store_dir(args.db)
-        dest = store / args.run_id / "snapshots" / ("submission_%d"
-                                                    % int(__import__("time").time()))
+        import uuid as _uuid
+        stamp = "%d_%s" % (int(__import__("time").time()), _uuid.uuid4().hex[:8])
+        workspace = args.workspace
+        if args.archive:
+            from ceb.hosted.upload import safe_extract_archive, UploadError
+            extract_dest = (store / args.run_id / "uploads"
+                            / ("upload_%s" % stamp))
+            try:
+                workspace = safe_extract_archive(args.archive, extract_dest)
+            except UploadError as exc:
+                _print("upload rejected: %s" % exc.public_message)
+                return 2
+        dest = store / args.run_id / "snapshots" / ("submission_%s" % stamp)
         try:
-            snapshot, tree_hash = snapshot_workspace(args.workspace, dest)
+            snapshot, tree_hash = snapshot_workspace(workspace, dest)
         except SubmissionError as exc:
             _print("submission rejected: %s" % exc.public_message)
             return 2
@@ -427,13 +441,97 @@ def cmd_hosted_submit(args):
 def cmd_hosted_worker_run_once(args):
     from ceb.hosted.worker import run_once
 
+    # Resolve the evaluation profile. Legacy flags win for backward
+    # compatibility: --quick-test-mode -> smoke, --final-eval -> final-eval.
+    if args.quick_test_mode:
+        profile = "smoke"
+    elif args.final_eval:
+        profile = "final-eval"
+    else:
+        profile = args.profile
+
     status = run_once(
         args.db, eval_pack_dir=args.eval_pack, engine_jail=args.engine_jail,
-        quick_test_mode=args.quick_test_mode,
-        mode="final_eval" if args.final_eval else "official_round",
+        profile=profile, allow_unjailed=args.dev_allow_unjailed,
+        worker_id=args.worker_id, lease_seconds=args.lease_seconds,
         progress=lambda msg: _print("  " + msg))
     _print(json.dumps(status, indent=2))
     return 0 if status["status"] in ("done", "idle") else 2
+
+
+def cmd_hosted_submit_track_b(args):
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.submissions import snapshot_workspace, SubmissionError
+
+    conn = hosted_db.connect(args.db)
+    try:
+        if hosted_db.get_run(conn, args.run_id) is None:
+            hosted_db.create_run(conn, args.run_id, "B")
+        store = hosted_db.store_dir(args.db)
+        import uuid as _uuid
+        stamp = "%d_%s" % (int(__import__("time").time()), _uuid.uuid4().hex[:8])
+        cand_dest = store / args.run_id / "snapshots" / ("candidate_%s" % stamp)
+        base_dest = store / args.run_id / "snapshots" / ("baseline_%s" % stamp)
+        try:
+            cand_snap, cand_hash = snapshot_workspace(args.candidate_src, cand_dest)
+            base_snap, base_hash = snapshot_workspace(args.baseline_src, base_dest)
+        except SubmissionError as exc:
+            _print("submission rejected: %s" % exc.public_message)
+            return 2
+        sub_id = hosted_db.add_track_b_submission(
+            conn, args.run_id, candidate_snapshot=cand_snap,
+            baseline_snapshot=base_snap, candidate_hash=cand_hash,
+            baseline_hash=base_hash, build_script=args.build_script,
+            engine_relpath=args.engine_relpath)
+        job_id = hosted_db.enqueue_job(conn, args.run_id, "track_b_official_eval")
+    finally:
+        conn.close()
+    _print("submitted Track B run %r" % args.run_id)
+    _print("  candidate  : %s (%s)" % (cand_snap, cand_hash))
+    _print("  baseline   : %s (%s)" % (base_snap, base_hash))
+    _print("  submission : #%d" % sub_id)
+    _print("  job queued : #%d (track_b_official_eval)" % job_id)
+    _print("next: ceb hosted worker run-once --db %s --eval-pack <pack> "
+           "--engine-jail docker" % args.db)
+    return 0
+
+
+def cmd_hosted_keygen(args):
+    from ceb.hosted.signing import generate_keypair, SigningError
+
+    try:
+        key_id = generate_keypair(args.private_key, args.public_key)
+    except SigningError as exc:
+        _print("keygen failed: %s" % exc)
+        return 2
+    _print("generated Ed25519 keypair")
+    _print("  private key : %s (keep secret; never commit)" % args.private_key)
+    _print("  public key  : %s (publish for verification)" % args.public_key)
+    _print("  key_id      : %s" % key_id)
+    _print("sign results with: ceb hosted sign-result --result <f> "
+           "--private-key %s" % args.private_key)
+    return 0
+
+
+def cmd_hosted_result_export(args):
+    from ceb.hosted import db as hosted_db
+    from ceb.hosted.result_bundle import export_result_bundle, ResultBundleError
+
+    conn = hosted_db.connect(args.db)
+    try:
+        try:
+            out_path, manifest = export_result_bundle(
+                conn, args.run_id, args.out, db_path=args.db)
+        except ResultBundleError as exc:
+            _print("export failed: %s" % exc)
+            return 2
+    finally:
+        conn.close()
+    _print("exported public result bundle for run %r" % args.run_id)
+    _print("  bundle  : %s" % out_path)
+    _print("  files   : %s" % ", ".join(manifest["files"]))
+    _print("  (public artifacts only; no private/admin detail included)")
+    return 0
 
 
 def cmd_hosted_result_show(args):
@@ -443,24 +541,33 @@ def cmd_hosted_result_show(args):
     conn = hosted_db.connect(args.db)
     try:
         results = hosted_db.results_for_run(conn, args.run_id)
+        best = hosted_db.select_best_verified_result(conn, args.run_id)
     finally:
         conn.close()
     if not results:
         _print("no results for run %r" % args.run_id)
         return 2
+    best_id = best["id"] if best else None
     for row in results:
-        _print("result #%d  mode=%s  verified=%s  score=%s"
-               % (row["id"], row["mode"], bool(row["verified"]), row["score"]))
+        marker = "  <- selected (best verified)" if row["id"] == best_id else ""
+        _print("result #%d  mode=%s  profile=%s  grade=%s  verified=%s  "
+               "score=%s%s"
+               % (row["id"], row["mode"], row.get("profile"),
+                  row.get("verification_grade"), bool(row["verified"]),
+                  row["score"], marker))
         try:
             result = load_result(row["result_path"])
         except (OSError, ValueError):
             _print("  (result file unavailable)")
             continue
-        _print("  signature : %s" % result.get("signature", {}).get("status"))
+        sig = result.get("signature", {})
+        _print("  signature : %s (%s)" % (sig.get("status"), sig.get("algorithm")))
         metadata = result.get("metadata", {})
         _print("  eval pack : %s (%s)" % (metadata.get("eval_pack_id"),
                                           metadata.get("eval_pack_hash")))
         _print("  file      : %s" % row["result_path"])
+    if best is None:
+        _print("selected for leaderboard: none (no verified result)")
     return 0
 
 
@@ -477,40 +584,70 @@ def cmd_hosted_leaderboard(args):
     if not board["entries"]:
         _print("  (no verified results)")
         return 0
-    _print("  %-4s %-28s %-10s %s" % ("#", "run", "score", "mode"))
+    _print("  %-4s %-24s %-10s %-16s %s"
+           % ("#", "run", "score", "mode", "grade"))
     for i, entry in enumerate(board["entries"], 1):
-        _print("  %-4d %-28s %-10s %s" % (i, entry["run_id"], entry["score"],
-                                          entry["mode"]))
+        _print("  %-4d %-24s %-10s %-16s %s"
+               % (i, entry["run_id"], entry["score"], entry["mode"],
+                  entry.get("verification_grade") or "-"))
     return 0
 
 
 def cmd_hosted_sign_result(args):
     from ceb.hosted.official_eval import load_result
-    from ceb.hosted.signing import sign_result, get_signing_key
+    from ceb.hosted.signing import (
+        sign_official_result, sign_result_ed25519, load_private_key,
+        SigningError)
 
     result = load_result(args.result)
-    sign_result(result)
+    try:
+        if args.private_key:
+            sign_result_ed25519(result, load_private_key(args.private_key))
+        else:
+            # Ed25519 if CEB_SIGNING_PRIVATE_KEY is set, else HMAC, else unsigned.
+            sign_official_result(result)
+    except SigningError as exc:
+        _print("signing failed: %s" % exc)
+        return 2
     Path(args.result).write_text(json.dumps(result, indent=2) + "\n",
                                  encoding="utf-8")
-    status = result["signature"]["status"]
-    _print("result %s: %s" % (args.result, status))
-    if status == "unsigned":
-        _print("  (set CEB_SIGNING_KEY to sign; unsigned results have no "
-               "cryptographic authenticity)")
+    sig = result["signature"]
+    _print("result %s: %s (%s)" % (args.result, sig["status"],
+                                   sig.get("algorithm")))
+    if sig["status"] == "unsigned":
+        _print("  (pass --private-key <ed25519.pem>, or set "
+               "CEB_SIGNING_PRIVATE_KEY / CEB_SIGNING_KEY; unsigned results "
+               "have no cryptographic authenticity)")
     return 0
 
 
 def cmd_hosted_verify_result(args):
     from ceb.hosted.verifier import verify_result_file
+    from ceb.hosted.signing import load_public_key, SigningError
 
-    verdict = verify_result_file(args.result)
+    public_key = None
+    if args.public_key:
+        try:
+            public_key = load_public_key(args.public_key)
+        except SigningError as exc:
+            _print("could not load public key: %s" % exc)
+            return 2
+    verdict = verify_result_file(args.result, public_key=public_key)
     _print(json.dumps(verdict, indent=2))
+    if not verdict["authentic"] and \
+            verdict.get("signature_trust") == "embedded-self-described":
+        _print("  (signature checks out against the result's OWN embedded key "
+               "only — this proves internal consistency, not authenticity. "
+               "Pass --public-key <operator.pem> obtained out-of-band for a "
+               "real verdict.)")
     return 0 if verdict["authentic"] else 2
 
 
 # ----- parser ----------------------------------------------------------------------
 
 def build_parser():
+    from ceb.hosted.profiles import PROFILE_CHOICES
+
     parser = argparse.ArgumentParser(
         prog="ceb",
         description="chess_en_bench: benchmark for LLM agents that build or "
@@ -665,23 +802,57 @@ def build_parser():
     p = hosted_sub.add_parser("init", help="initialize the hosted database")
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.set_defaults(func=cmd_hosted_init)
-    p = hosted_sub.add_parser("submit", help="snapshot + enqueue a workspace")
+    p = hosted_sub.add_parser("submit",
+                              help="snapshot + enqueue a workspace or archive")
     p.add_argument("--track", default="A")
-    p.add_argument("--workspace", required=True)
+    p.add_argument("--workspace", default=None,
+                   help="server-local workspace directory")
+    p.add_argument("--archive", default=None,
+                   help="a .tar.gz/.tar/.zip upload (safely extracted: no "
+                        "symlinks, absolute paths, traversal, or oversized files)")
     p.add_argument("--run-id", required=True)
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.set_defaults(func=cmd_hosted_submit)
+    p = hosted_sub.add_parser("submit-track-b",
+                              help="snapshot + enqueue a Track B candidate")
+    p.add_argument("--candidate-src", required=True,
+                   help="candidate source tree (engine-edited Stockfish)")
+    p.add_argument("--baseline-src", required=True,
+                   help="pinned baseline source tree")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--build-script", default="ceb_build.sh")
+    p.add_argument("--engine-relpath", default="ceb_engine")
+    p.set_defaults(func=cmd_hosted_submit_track_b)
     worker = hosted_sub.add_parser("worker", help="official evaluation worker")
     worker_sub = worker.add_subparsers(dest="subsubcommand", required=True)
-    p = worker_sub.add_parser("run-once", help="process one queued job")
+    p = worker_sub.add_parser("run-once", help="claim + process one queued job")
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.add_argument("--eval-pack", default=None,
                    help="private eval pack (REQUIRED to verify)")
-    p.add_argument("--engine-jail", choices=["none", "docker"], default="none")
+    p.add_argument("--engine-jail", choices=["none", "docker"], default="docker",
+                   help="confine the untrusted engine (default: docker; "
+                        "verified results REQUIRE docker)")
+    p.add_argument("--profile", choices=list(PROFILE_CHOICES),
+                   default="official",
+                   help="evaluation profile: smoke (diagnostic, never "
+                        "verified), official, or final-production (preferred "
+                        "by the leaderboard)")
+    p.add_argument("--dev-allow-unjailed", action="store_true",
+                   help="DEV ONLY: run a verifiable profile without the docker "
+                        "jail; the result is forced to verified=false "
+                        "(diagnostic) and never reaches the leaderboard")
+    p.add_argument("--worker-id", default=None,
+                   help="identifier recorded on claimed jobs (multi-worker)")
+    p.add_argument("--lease-seconds", type=int, default=None,
+                   help="claim lease; a stale running job past its lease may "
+                        "be reclaimed by another worker")
     p.add_argument("--final-eval", action="store_true",
-                   help="run a final_eval instead of an official round")
+                   help="legacy: run a final_eval (maps to the final-eval "
+                        "profile)")
     p.add_argument("--quick-test-mode", action="store_true",
-                   help="tiny toy config for CI/smoke (profile recorded)")
+                   help="legacy: tiny toy config (maps to the smoke profile; "
+                        "never verified)")
     p.set_defaults(func=cmd_hosted_worker_run_once)
     result = hosted_sub.add_parser("result", help="inspect results")
     result_sub = result.add_subparsers(dest="subsubcommand", required=True)
@@ -689,15 +860,30 @@ def build_parser():
     p.add_argument("--run-id", required=True)
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.set_defaults(func=cmd_hosted_result_show)
+    p = result_sub.add_parser(
+        "export", help="export a public result bundle (zip; no private detail)")
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--db", default="runs/hosted.sqlite")
+    p.add_argument("--out", required=True, help="output .zip path")
+    p.set_defaults(func=cmd_hosted_result_export)
     p = hosted_sub.add_parser("leaderboard", help="verified-only leaderboard")
     p.add_argument("--db", default="runs/hosted.sqlite")
     p.add_argument("--track", default="A")
     p.set_defaults(func=cmd_hosted_leaderboard)
+    p = hosted_sub.add_parser("keygen", help="generate an Ed25519 signing keypair")
+    p.add_argument("--private-key", required=True, help="output private key path")
+    p.add_argument("--public-key", required=True, help="output public key path")
+    p.set_defaults(func=cmd_hosted_keygen)
     p = hosted_sub.add_parser("sign-result", help="sign a result file")
     p.add_argument("--result", required=True)
+    p.add_argument("--private-key", default=None,
+                   help="Ed25519 private key PEM (else CEB_SIGNING_PRIVATE_KEY, "
+                        "else legacy CEB_SIGNING_KEY HMAC)")
     p.set_defaults(func=cmd_hosted_sign_result)
     p = hosted_sub.add_parser("verify-result", help="verify a result file")
     p.add_argument("--result", required=True)
+    p.add_argument("--public-key", default=None,
+                   help="Ed25519 public key PEM for third-party verification")
     p.set_defaults(func=cmd_hosted_verify_result)
 
     return parser

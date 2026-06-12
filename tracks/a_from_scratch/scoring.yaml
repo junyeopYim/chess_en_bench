@@ -59,3 +59,13 @@ round_modes:
     anchors: []
     # Hosted final evals may set anchors plus:
     # anchors_required: true
+  final_production:       # production leaderboard CI; strict gate; no budget cost; NEVER run by CI
+    opponents: [BenchRandom, BenchGreedyCapture, BenchMaterial1, BenchPST1, BenchMiniMax2, BenchAlphaBeta3]
+    games_per_opponent: 336   # 6 opponents x 336 = 2016 games (paired openings)
+    movetime_ms: 1000
+    max_plies: 300
+    openings_limit: 24
+    anchors: []
+    # Production runs typically enable Stockfish UCI_Elo anchors and require them:
+    # anchors: [SF18_UCI_Elo_1320, SF18_UCI_Elo_1600, SF18_UCI_Elo_1900, SF18_UCI_Elo_2200]
+    # anchors_required: true

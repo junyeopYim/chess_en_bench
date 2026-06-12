@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chess-en-bench"
-version = "0.3.0"
+version = "0.3.1"
 description = "Benchmark platform for LLM coding agents that build or optimize chess engines"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,8 +17,9 @@ dev = ["pytest>=7", "httpx>=0.24"]
 server = ["fastapi>=0.110", "uvicorn>=0.27"]
 # Hosted official evaluation. SQLite + stdlib hashlib/hmac are built in, so
 # the default backend needs nothing extra; this extra pulls the server stack
-# used by the hosted API endpoints.
-hosted = ["fastapi>=0.110", "uvicorn>=0.27"]
+# used by the hosted API endpoints plus `cryptography` for Ed25519 public-key
+# result signing (legacy HMAC works without it).
+hosted = ["fastapi>=0.110", "uvicorn>=0.27", "cryptography>=42"]
 
 [project.scripts]
 ceb = "ceb.cli:main"

@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IMAGE="${1:-chess-en-bench-jail:0.3}"
+IMAGE="${1:-chess-en-bench-jail:0.4}"
 
 docker build -f infra/docker/engine_jail.Dockerfile -t "$IMAGE" .
 

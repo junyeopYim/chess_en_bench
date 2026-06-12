@@ -21,7 +21,7 @@ import uuid
 
 from pathlib import Path
 
-JAIL_IMAGE = "chess-en-bench-jail:0.3"
+JAIL_IMAGE = "chess-en-bench-jail:0.4"
 SUBMISSION_MOUNT = "/submission"
 CONTAINER_PREFIX = "ceb-jail-"
 
