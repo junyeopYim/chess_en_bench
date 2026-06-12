@@ -1,0 +1,6 @@
+# Convenience pin-less requirements for development.
+# Canonical dependency metadata lives in pyproject.toml.
+# Install the project instead:  pip install -e ".[dev,server]"
+pytest>=7
+fastapi>=0.110
+uvicorn>=0.27

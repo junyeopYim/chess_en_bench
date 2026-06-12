@@ -1,0 +1,10 @@
+{"id": "startpos", "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", "tags": ["opening"]}
+{"id": "after_e4", "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1", "tags": ["opening", "black-to-move"]}
+{"id": "castling_both", "fen": "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1", "tags": ["castling"]}
+{"id": "en_passant_f6", "fen": "rnbqkbnr/ppp1p1pp/8/3pPp2/8/8/PPPP1PPP/RNBQKBNR w KQkq f6 0 3", "tags": ["en-passant"]}
+{"id": "promotion_a7", "fen": "8/P7/8/8/8/8/k6K/8 w - - 0 1", "tags": ["promotion", "endgame"]}
+{"id": "check_evasion_qh4", "fen": "rnb1kbnr/pppp1ppp/4p3/8/4PP1q/8/PPPP2PP/RNBQKBNR w KQkq - 1 3", "tags": ["check-evasion"]}
+{"id": "kiwipete", "fen": "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", "tags": ["complex", "castling", "tactics"]}
+{"id": "cpw_pos5", "fen": "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", "tags": ["promotion", "complex"]}
+{"id": "kp_endgame", "fen": "8/8/8/4k3/8/4P3/4K3/8 w - - 0 1", "tags": ["endgame"]}
+{"id": "black_ep_d3", "fen": "rnbqkbnr/ppp1pppp/8/8/3pP3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 3", "tags": ["en-passant", "black-to-move"]}

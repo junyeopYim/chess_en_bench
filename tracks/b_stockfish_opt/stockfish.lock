@@ -1,0 +1,10 @@
+# Pinned Stockfish baseline for Track B.
+# Official evaluation MUST use this exact ref. Never a moving branch.
+
+name: Stockfish
+release: "Stockfish 18"
+tag: sf_18
+commit: cb3d4ee
+repo: https://github.com/official-stockfish/Stockfish.git
+fetched_by: scripts/setup_stockfish.sh
+location: third_party/stockfish

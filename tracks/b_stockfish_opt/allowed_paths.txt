@@ -1,0 +1,12 @@
+# Track B diff whitelist: candidate trees may differ from the pinned
+# baseline ONLY in files matching these fnmatch globs (paths relative to
+# the Stockfish source root). Everything else is a violation.
+src/search.cpp
+src/search.h
+src/movepick.cpp
+src/movepick.h
+src/history.h
+src/timeman.cpp
+src/timeman.h
+src/tt.cpp
+src/tt.h

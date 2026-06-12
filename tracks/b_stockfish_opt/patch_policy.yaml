@@ -1,0 +1,13 @@
+# Track B patch policy (enforced by `ceb track-b check-diff`).
+
+whitelist_file: allowed_paths.txt
+forbidden_file: forbidden_paths.txt
+precedence: forbidden_over_allowed   # forbidden match always loses
+max_changed_files: 9                 # cannot exceed the whitelist itself
+allow_added_files: false             # only modify whitelisted files
+allow_removed_files: false
+notes: |
+  The candidate must remain a functionally complete Stockfish: it must
+  build with the unmodified Makefile and pass the baseline's bench command.
+  Only search behavior may change; evaluation, NNUE weights, movegen, and
+  protocol code are frozen.

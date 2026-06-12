@@ -1,0 +1,59 @@
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "1"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "Italian Game"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bc4 *
+
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "2"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "Sicilian Defence"]
+
+1. e4 c5 2. Nf3 d6 *
+
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "3"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "Queen's Gambit Declined"]
+
+1. d4 d5 2. c4 e6 *
+
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "4"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "French Defence"]
+
+1. e4 e6 2. d4 d5 *
+
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "5"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "King's Indian Defence"]
+
+1. d4 Nf6 2. c4 g6 *
+
+[Event "chess_en_bench public openings"]
+[Site "?"]
+[Round "6"]
+[White "?"]
+[Black "?"]
+[Result "*"]
+[Opening "Ruy Lopez"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 *

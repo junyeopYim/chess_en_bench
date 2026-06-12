@@ -1,0 +1,10 @@
+# Track A — from-scratch chess engine benchmark.
+# Parsed by bench/ceb/config.py (simple YAML subset: flat scalars,
+# 2-space-indented nesting, scalar lists).
+
+id: a_from_scratch
+name: "Track A: from-scratch chess engine"
+protocol: uci
+official_rounds: 3        # official round budget per run (gate attempts unlimited)
+gate_unlimited: true
+final_score_policy: best_valid_round

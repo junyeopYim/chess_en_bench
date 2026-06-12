@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Benchmark outputs (kept local; runs/ and artifacts/ have their own .gitignore)
+*.pgn.generated
+*.games.txt
+
+# Third-party sources fetched by scripts/setup_stockfish.sh
+third_party/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Secrets — never commit credentials
+*.token
+*.secret
+.env

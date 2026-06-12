@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>chess_en_bench — dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    (function () {
+      var stored = localStorage.getItem("ceb-theme");
+      var dark = stored ? stored === "dark"
+        : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (dark) document.documentElement.classList.add("dark");
+    })();
+  </script>
+</head>
+<body>
+  <div class="page">
+    <nav class="nav" aria-label="main">
+      <a class="nav-logo" href="/">chess_en_bench</a>
+      <div class="nav-actions">
+        <button class="button" id="theme-toggle" type="button"
+                aria-pressed="false">Toggle theme</button>
+        <a class="button primary"
+           href="https://github.com/junyeopYim/chess_en_bench">View source</a>
+      </div>
+    </nav>
+
+    <header class="hero">
+      <p class="section-label">Benchmark dashboard</p>
+      <h1>Chess engines,<br>built by agents.</h1>
+      <p>Local results for Track A (from-scratch engines) and Track B
+        (Stockfish search optimization). Data comes from this machine's
+        <code>runs/</code> directory via the bundled API server.</p>
+    </header>
+
+    <section class="card" aria-labelledby="health-heading">
+      <h2 id="health-heading">Server health</h2>
+      <span class="status-pill" id="health-pill">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="health-text">checking…</span>
+      </span>
+    </section>
+
+    <section class="card" aria-labelledby="leaderboard-heading">
+      <h2 id="leaderboard-heading">Track A leaderboard</h2>
+      <div id="leaderboard"><p class="empty-state">Loading…</p></div>
+    </section>
+
+    <section class="card" aria-labelledby="runs-heading">
+      <h2 id="runs-heading">Recent runs</h2>
+      <div id="runs"><p class="empty-state">Loading…</p></div>
+    </section>
+
+    <footer>
+      Start a round with
+      <code>ceb round run --track A --workspace &lt;dir&gt; --round 1 --quick</code>
+      and refresh this page.
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+# Public gate configuration for Track A (read by bench/ceb/gate/gate_runner.py).
+# Agents may read this file; the gate is fully public and may be run
+# unlimited times.
+
+handshake_timeout_s: 8
+bestmove_movetime_ms: 200
+bestmove_grace_ms: 3000
+max_bestmove_failures: 2
+perft_required: false      # 'go perft' extension is recommended, not mandatory
+perft_max_depth: 3
+time_check_movetime_ms: 100
+time_check_budget_ms: 2500
+
+mini_match:
+  enabled: true
+  games: 2
+  movetime_ms: 50
+  max_plies: 60
+  opponent: BenchRandom

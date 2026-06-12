@@ -1,0 +1,14 @@
+chess_en_bench
+Copyright (c) 2026 junyeopYim
+
+This repository (benchmark harness, oracle, opponents, docs) is licensed
+under the MIT License (see LICENSE).
+
+Third-party software
+--------------------
+Track B evaluates patches against Stockfish, which is licensed under the
+GNU General Public License v3 (GPLv3). Stockfish sources are NOT distributed
+with this repository. scripts/setup_stockfish.sh can fetch the pinned
+Stockfish release (Stockfish 18, tag sf_18, commit cb3d4ee) from the official
+repository into third_party/stockfish, which is gitignored. Any distribution
+of Stockfish or derived binaries must comply with GPLv3.

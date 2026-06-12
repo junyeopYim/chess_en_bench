@@ -1,0 +1,8 @@
+# Track B — Stockfish search optimization benchmark.
+
+id: b_stockfish_opt
+name: "Track B: Stockfish search optimization"
+protocol: uci
+baseline_lock: stockfish.lock
+official_rounds: 3
+evaluation: candidate_vs_baseline_delta_elo

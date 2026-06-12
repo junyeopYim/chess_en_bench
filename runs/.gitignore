@@ -1,0 +1,3 @@
+# Run outputs are local; keep only this file in git.
+*
+!.gitignore

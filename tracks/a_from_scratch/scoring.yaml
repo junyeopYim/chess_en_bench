@@ -1,0 +1,26 @@
+# Track A scoring configuration (see docs/scoring.md).
+
+opponent_ratings:
+  BenchRandom: 400
+  BenchGreedyCapture: 600
+  BenchMaterial1: 800
+  BenchPST1: 1000
+  BenchMiniMax2: 1200
+  BenchAlphaBeta3: 1400
+
+penalties:                # points subtracted per candidate fault
+  illegal_move: 30
+  timeout: 15
+  crash: 25
+
+round_modes:
+  quick:                  # smoke evaluation; does not consume official budget
+    opponents: [BenchRandom, BenchMaterial1]
+    games_per_opponent: 2
+    movetime_ms: 50
+    max_plies: 120
+  official:               # consumes one unit of official round budget
+    opponents: [BenchRandom, BenchGreedyCapture, BenchMaterial1, BenchPST1, BenchMiniMax2, BenchAlphaBeta3]
+    games_per_opponent: 4
+    movetime_ms: 200
+    max_plies: 200

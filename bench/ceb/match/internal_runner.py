@@ -1,0 +1,193 @@
+"""Internal Python UCI match runner (fallback when fastchess/cutechess are absent).
+
+Every move is validated against the internal oracle; illegal moves, timeouts,
+and crashes lose the game for the offending side and are tallied separately
+for penalty scoring.
+"""
+
+import time
+
+from ceb.chess import (
+    START_FEN, parse_fen, board_to_fen,
+    generate_legal, make_move, in_check,
+)
+from ceb.chess.pgn import game_to_text, write_games_text
+from ceb.uci.client import UCIClient, EngineTimeout, EngineCrashed, EngineError
+
+RESULT_WHITE = "1-0"
+RESULT_BLACK = "0-1"
+RESULT_DRAW = "1/2-1/2"
+
+FAULT_ILLEGAL = "illegal"
+FAULT_TIMEOUT = "timeout"
+FAULT_CRASH = "crash"
+
+
+def _loss_for(side_white):
+    return RESULT_BLACK if side_white else RESULT_WHITE
+
+
+def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
+              max_plies=200, grace_ms=3000, white_name="white",
+              black_name="black", seed=None, cwds=(None, None)):
+    """Play one game. Returns a dict game record.
+
+    cwds: (white_cwd, black_cwd) working directories for the two processes.
+    """
+    record = {
+        "white": white_name,
+        "black": black_name,
+        "start_fen": start_fen,
+        "movetime_ms": movetime_ms,
+        "max_plies": max_plies,
+        "moves": [],
+        "result": RESULT_DRAW,
+        "reason": "",
+        "fault": None,        # None | {"side": "white"|"black", "kind": ...}
+        "final_fen": None,
+        "plies": 0,
+    }
+    board = parse_fen(start_fen)
+    moves_uci = []
+    clients = {}
+
+    def fault(side_white, kind, reason):
+        record["result"] = _loss_for(side_white)
+        record["reason"] = reason
+        record["fault"] = {"side": "white" if side_white else "black", "kind": kind}
+
+    try:
+        try:
+            white = UCIClient(white_cmd, cwd=cwds[0], name=white_name)
+            clients["w"] = white
+            white.handshake()
+            white.new_game()
+        except EngineError as exc:
+            fault(True, FAULT_CRASH, "white failed to start: %s" % exc)
+            return record
+        try:
+            black = UCIClient(black_cmd, cwd=cwds[1], name=black_name)
+            clients["b"] = black
+            black.handshake()
+            black.new_game()
+        except EngineError as exc:
+            fault(False, FAULT_CRASH, "black failed to start: %s" % exc)
+            return record
+
+        if seed is not None:
+            for client in (white, black):
+                try:
+                    client.send("setoption name Seed value %d" % seed)
+                except EngineError:
+                    pass
+
+        start_is_startpos = start_fen == START_FEN
+        while True:
+            legal = {m.uci(): m for m in generate_legal(board)}
+            if not legal:
+                if in_check(board):
+                    winner_white = not board.white_to_move()
+                    record["result"] = RESULT_WHITE if winner_white else RESULT_BLACK
+                    record["reason"] = "checkmate"
+                else:
+                    record["reason"] = "stalemate"
+                break
+            if board.halfmove_clock >= 100:
+                record["reason"] = "fifty-move rule"
+                break
+            if len(moves_uci) >= max_plies:
+                record["reason"] = "draw adjudicated at max plies"
+                break
+
+            mover_white = board.white_to_move()
+            client = white if mover_white else black
+            try:
+                client.set_position(None if start_is_startpos else start_fen,
+                                    moves_uci)
+                best = client.go_movetime(movetime_ms, grace_ms=grace_ms)
+            except EngineTimeout as exc:
+                fault(mover_white, FAULT_TIMEOUT, str(exc))
+                break
+            except EngineError as exc:
+                fault(mover_white, FAULT_CRASH, str(exc))
+                break
+
+            move = legal.get(best)
+            if move is None:
+                fault(mover_white, FAULT_ILLEGAL,
+                      "illegal move %r in position %s" % (best, board_to_fen(board)))
+                break
+            board = make_move(board, move)
+            moves_uci.append(best)
+    finally:
+        for client in clients.values():
+            client.close()
+
+    record["moves"] = moves_uci
+    record["plies"] = len(moves_uci)
+    record["final_fen"] = board_to_fen(board)
+    return record
+
+
+def play_match(candidate_cmd, opponent_cmd, *, games=2, movetime_ms=100,
+               max_plies=200, grace_ms=3000, candidate_name="candidate",
+               opponent_name="opponent", start_fens=None, base_seed=1,
+               candidate_cwd=None, games_text_path=None):
+    """Alternating-color match. Returns a JSON-serializable match report
+    with results from the candidate's perspective."""
+    start_fens = list(start_fens or [START_FEN])
+    report = {
+        "schema": "ceb.match.report/v1",
+        "candidate": candidate_name,
+        "opponent": opponent_name,
+        "games_planned": games,
+        "movetime_ms": movetime_ms,
+        "max_plies": max_plies,
+        "games": [],
+        "totals": {"wins": 0, "draws": 0, "losses": 0},
+        "candidate_faults": {FAULT_ILLEGAL: 0, FAULT_TIMEOUT: 0, FAULT_CRASH: 0},
+        "opponent_faults": {FAULT_ILLEGAL: 0, FAULT_TIMEOUT: 0, FAULT_CRASH: 0},
+        "elapsed_s": None,
+    }
+    started = time.monotonic()
+    game_texts = []
+
+    for i in range(games):
+        candidate_white = i % 2 == 0
+        start_fen = start_fens[(i // 2) % len(start_fens)]
+        if candidate_white:
+            rec = play_game(candidate_cmd, opponent_cmd, start_fen=start_fen,
+                            movetime_ms=movetime_ms, max_plies=max_plies,
+                            grace_ms=grace_ms, white_name=candidate_name,
+                            black_name=opponent_name, seed=base_seed + i,
+                            cwds=(candidate_cwd, None))
+        else:
+            rec = play_game(opponent_cmd, candidate_cmd, start_fen=start_fen,
+                            movetime_ms=movetime_ms, max_plies=max_plies,
+                            grace_ms=grace_ms, white_name=opponent_name,
+                            black_name=candidate_name, seed=base_seed + i,
+                            cwds=(None, candidate_cwd))
+        rec["candidate_color"] = "white" if candidate_white else "black"
+        report["games"].append(rec)
+
+        if rec["result"] == RESULT_DRAW:
+            report["totals"]["draws"] += 1
+        elif (rec["result"] == RESULT_WHITE) == candidate_white:
+            report["totals"]["wins"] += 1
+        else:
+            report["totals"]["losses"] += 1
+
+        if rec["fault"]:
+            fault_is_candidate = (rec["fault"]["side"] == "white") == candidate_white
+            bucket = "candidate_faults" if fault_is_candidate else "opponent_faults"
+            report[bucket][rec["fault"]["kind"]] += 1
+
+        game_texts.append(game_to_text(
+            rec["white"], rec["black"], rec["result"], rec["moves"],
+            start_fen=start_fen, reason=rec["reason"]))
+
+    report["elapsed_s"] = round(time.monotonic() - started, 2)
+    if games_text_path:
+        write_games_text(games_text_path, game_texts)
+        report["games_text"] = str(games_text_path)
+    return report

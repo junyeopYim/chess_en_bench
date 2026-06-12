@@ -1,0 +1,21 @@
+# Track B hard-forbidden paths: changes here always fail the diff check,
+# even if a future whitelist edit accidentally overlaps. Evaluation,
+# networks, movegen, board representation, protocol, and build tooling are
+# out of scope for a search-optimization track.
+src/evaluate.cpp
+src/evaluate.h
+src/nnue/*
+src/nnue/**
+**/*.nnue
+src/position.cpp
+src/position.h
+src/movegen.cpp
+src/movegen.h
+src/bitboard.cpp
+src/bitboard.h
+src/uci.cpp
+src/uci.h
+src/ucioption.cpp
+src/Makefile
+Makefile
+scripts/*
