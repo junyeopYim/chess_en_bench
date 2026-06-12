@@ -7,7 +7,7 @@ attempt fails, or an official/quick round is invalidated and — for official
 rounds — still consumes round budget. Deliberate or repeated violations
 invalidate the entire run.
 
-Where v0.1 already enforces a rule mechanically, the enforcement point is
+Where the benchmark already enforces a rule mechanically, the enforcement point is
 named. Everything else is enforced by operator review of the workspace and
 artifacts; "not detected automatically" never means "allowed".
 
@@ -16,8 +16,8 @@ artifacts; "not detected automatically" never means "allowed".
 1. **No network access at run time.** Submissions MUST NOT open network
    connections during build (`build.sh`), the gate, or any match — no
    downloads, no online engines or tablebases, no telemetry.
-   *(v0.1: not blocked in code; see docs/security.md for the recommended
-   `--network none` container.)*
+   *(Enforced when evaluations run with `--sandbox docker` (`--network none`);
+   the default host mode does not block it — see docs/security.md.)*
 
 2. **No reading or patching benchmark internals or opponents.** Submissions
    MUST NOT read, import, modify, or link against `bench/ceb/` (including
@@ -33,19 +33,19 @@ artifacts; "not detected automatically" never means "allowed".
 4. **No targeting the harness process or files.** Submissions MUST NOT
    signal, kill, ptrace, or otherwise interfere with the harness or sibling
    processes, and MUST NOT tamper with `runs/`, `artifacts/`, reports, or
-   PGN/game files. *(v0.1: engines run in their own process group and are
+   PGN/game files. *(Enforced: engines run in their own process group and are
    killed as a group on close — `bench/ceb/uci/client.py`.)*
 
 5. **No output flooding or protocol abuse.** Engines MUST NOT spam stdout to
    stall evaluation, and MUST answer UCI commands within the configured
-   timeouts. *(v0.1: lines are truncated at 8,192 chars, intake is capped at
+   timeouts. *(Enforced: lines are truncated at 8,192 chars, intake is capped at
    10,000 queued lines, stderr is discarded, and every read times out —
    flooding hurts only the engine, and timeouts are scored as faults with
    penalties per `tracks/a_from_scratch/scoring.yaml`.)*
 
 6. **No illegal moves.** Every move is validated against the internal
    oracle; illegal moves are faults and are penalized.
-   *(v0.1: enforced — `bench/ceb/match/internal_runner.py`.)*
+   *(Enforced — `bench/ceb/match/internal_runner.py`.)*
 
 ## Track A (from-scratch engine)
 
@@ -66,7 +66,7 @@ artifacts; "not detected automatically" never means "allowed".
    `tracks/b_stockfish_opt/stockfish.lock` (Stockfish 18, tag `sf_18`,
    commit `cb3d4ee`), fetched via `scripts/setup_stockfish.sh` — never
    `master` or any other moving ref. Results against any other baseline are
-   invalid. *(v0.1: the setup script refuses a HEAD that does not match the
+   invalid. *(Enforced: the setup script refuses a HEAD that does not match the
    pinned commit.)*
 
 10. **No edits outside the diff whitelist.** Candidates may differ from the
@@ -75,7 +75,7 @@ artifacts; "not detected automatically" never means "allowed".
     `forbidden_paths.txt` (evaluation, NNUE, movegen, position, bitboards,
     UCI, Makefiles, scripts) MUST NOT change even if a whitelist edit ever
     overlapped — forbidden wins. No files may be added or removed
-    (`patch_policy.yaml`). *(v0.1: enforced — run it yourself:)*
+    (`patch_policy.yaml`). *(Enforced — run it yourself:)*
 
     ```sh
     ceb track-b check-diff --baseline third_party/stockfish --candidate <dir>

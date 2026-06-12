@@ -1,27 +1,33 @@
 # Handoff
 
 ## Goal
-chess_en_bench v0.1: local benchmark platform for LLM agents building (Track A)
-or optimizing (Track B) chess engines.
+chess_en_bench v0.2: credible local/hosted benchmark for LLM agents building
+(Track A) or optimizing (Track B) chess engines.
 
-## Current state
-- Package `ceb` (under `bench/`) installs with `pip install -e ".[dev,server]"`;
-  CLI `ceb` / `python -m ceb.cli` works.
-- Implemented and verified: chess oracle (canonical perft counts), UCI client,
-  public gate (9 checks), 6 benchmark opponents, internal match runner,
-  Elo/ladder/delta-Elo scoring, round state + budget logic, leaderboard,
-  FastAPI server + warm-minimal dashboard, Track B pin/whitelist tooling.
-- `pytest -q`: 69 tests green. Acceptance commands (doctor, gate run,
-  round run --quick, server start, api import) all pass locally.
-- Examples: `examples/submissions/minimal_uci_engine_python` passes the gate;
-  broken engines (illegal/timeout) fail it as intended.
+## Current state (branch v0.2-upgrade-agent)
+- v0.2 on top of the v0.1 MVP. All P0 tasks implemented and tested:
+  official leaderboard excludes quick rounds (`--include-quick` diagnostic),
+  run-id inference for `runs/<id>/workspace` layouts, strict gate
+  (perft mandatory, used by official rounds), opening suites
+  (`openings_public.jsonl`, rotated across opponents, paired colors),
+  Docker sandbox (`--sandbox docker`, network-none/read-only/limits/non-root),
+  hidden eval pack loader (`--eval-pack` / `CEB_PRIVATE_EVAL_DIR`,
+  extend/replace via manifest, id-only failure details, sanitized feedback).
+- P1: Track B automated round runner (`ceb track-b round run`: diff check →
+  handshake → paired games → delta Elo), GitHub Actions CI (3.10–3.12),
+  optional Stockfish limited-strength anchors (config + graceful skip).
+- `pytest -q`: 104 passed, 1 skipped (Docker integration, opt-in via
+  CEB_DOCKER_TESTS=1; verified passing locally with the image built).
+- Sandboxed gate verified end-to-end in Docker on this machine.
 
 ## Blockers
-- None for v0.1 scope.
+- None for v0.2 scope.
 
 ## Next steps
-- Track B: wire automated candidate-vs-baseline match orchestration
-  (build pinned Stockfish, play matches, feed `ceb.scoring.track_b`).
-- Optional fastchess/cutechess adapters for faster official rounds.
-- Container sandboxing for untrusted submissions (docs/security.md has the plan).
-- Hidden evaluation packs: populate `tracks/*/private/` per their READMEs.
+- Real-Stockfish Track B end-to-end recipe (build pinned sf_18 baseline +
+  candidate, then `ceb track-b round run` with both binaries).
+- fastchess/cutechess adapter (still optional/planned; internal runner is
+  the tested default).
+- Repetition-draw detection in the internal runner (max-plies adjudication
+  covers it today).
+- Hosted leaderboard ingestion/signing for self-reported runs.

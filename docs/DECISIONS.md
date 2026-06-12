@@ -1,5 +1,12 @@
 # Decisions
 
+- 2026-06-12 — v0.2: official leaderboard counts official rounds only; quick rounds are diagnostic (`--include-quick`) — free unlimited quick rounds must not corrupt rankings.
+- 2026-06-12 — v0.2: official rounds run the strict gate (perft mandatory); the standalone public gate stays lenient — development friendliness vs. official rule-correctness.
+- 2026-06-12 — v0.2: openings are JSONL (validated UCI move lists applied by the oracle), rotated across opponents in pairs with color swap — .pgn files kept for humans only.
+- 2026-06-12 — v0.2: sandbox re-invokes `ceb` inside a locked-down container (CEB_INSIDE_SANDBOX guard) rather than sandboxing per-process — one image, whole-evaluation isolation.
+- 2026-06-12 — v0.2: hidden eval packs are operator-mounted directories merged over the public pack (manifest extend/replace); rows get synthetic ids so reports/feedback never quote hidden FENs.
+- 2026-06-12 — v0.2: Track B runner takes explicit engine commands (path or bench opponent name) so tests never need Stockfish; real evaluations document pinned-sf_18/same-flags/Threads=1.
+
 - 2026-06-12 — Core package is stdlib-only (FastAPI/uvicorn as optional `server` extra) — keeps the gate/runner installable anywhere and enforces "from scratch" credibility.
 - 2026-06-12 — Oracle uses copy-make legality filtering over (file,rank)-delta movegen — slower than bitboards but simple to audit; correctness proven by canonical perft counts in tests.
 - 2026-06-12 — `go perft` UCI extension is recommended (warn), not mandatory (fail) in the gate — lets minimal engines pass while still verifying counts when present.

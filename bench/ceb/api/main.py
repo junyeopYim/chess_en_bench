@@ -42,15 +42,19 @@ def list_runs():
 
 
 @app.get("/api/leaderboard")
-def leaderboard(track: str = "A"):
+def leaderboard(track: str = "A", include_quick: bool = False):
+    """Official leaderboard (official rounds only). include_quick=true is a
+    diagnostic view and must not be presented as an official ranking."""
     if track.upper() not in ("A", "B"):
         raise HTTPException(status_code=400, detail="track must be A or B")
     if track.upper() == "B":
-        # Track B official evaluation is not part of v0.1; report honestly.
+        # Track B has no aggregated leaderboard yet; rounds are scored
+        # individually via `ceb track-b round run`.
         return {"schema": "ceb.leaderboard/v1", "track": "B", "entries": [],
-                "note": "Track B leaderboard requires the Stockfish evaluation "
-                        "pipeline; see docs/track_b_stockfish_optimization.md"}
-    return compute_leaderboard(paths.runs_dir(), track="A")
+                "note": "Track B rounds are scored per run; see "
+                        "docs/track_b_stockfish_optimization.md"}
+    return compute_leaderboard(paths.runs_dir(), track="A",
+                               include_quick=include_quick)
 
 
 @app.get("/api/artifacts/{artifact_id}")

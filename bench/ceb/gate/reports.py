@@ -30,10 +30,11 @@ class CheckResult:
 
 
 class GateReport:
-    def __init__(self, track, workspace):
+    def __init__(self, track, workspace, strict=False):
         self.schema = "ceb.gate.report/v1"
         self.track = track
         self.workspace = str(workspace)
+        self.strict = bool(strict)
         self.started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         self.finished_at = None
         self.checks = []
@@ -58,6 +59,7 @@ class GateReport:
             "schema": self.schema,
             "track": self.track,
             "workspace": self.workspace,
+            "strict": self.strict,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "passed": self.passed,
@@ -70,7 +72,9 @@ class GateReport:
     def human_summary(self):
         icons = {STATUS_PASS: "PASS", STATUS_FAIL: "FAIL",
                  STATUS_WARN: "WARN", STATUS_SKIP: "SKIP"}
-        lines = ["Public gate — track %s — %s" % (self.track, self.workspace), ""]
+        mode = "strict" if self.strict else "public"
+        lines = ["%s gate — track %s — %s" % (mode.capitalize(), self.track,
+                                              self.workspace), ""]
         for c in self.checks:
             line = "  [%s] %-22s %s" % (icons[c.status], c.check_id, c.name)
             if c.details:

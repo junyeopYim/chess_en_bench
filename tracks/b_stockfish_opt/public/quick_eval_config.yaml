@@ -1,11 +1,11 @@
-# Quick (local, non-official) Track B evaluation parameters.
-# Official evaluation uses a larger hidden config; see
-# docs/track_b_stockfish_optimization.md for what v0.1 implements.
+# Quick (local, non-official) Track B evaluation defaults. The automated
+# runner (`ceb track-b round run`) takes these as CLI flags; see
+# docs/track_b_stockfish_optimization.md.
 
 games: 20
 movetime_ms: 100
 max_plies: 300
-openings: quick_openings.pgn
+openings: quick_openings.jsonl
 alternating_colors: true
 score_model: delta_elo_logistic   # see bench/ceb/scoring/elo.py
 confidence: 0.95

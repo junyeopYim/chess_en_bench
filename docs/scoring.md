@@ -17,7 +17,8 @@ delta_elo  = -400 * log10(1 / clamped - 1)
 
 `delta_elo` is the Elo difference implied by the (clamped) score rate under
 the standard logistic model. Positive means the candidate outperformed the
-reference (the opponent in Track A, the pinned baseline in Track B).
+reference (the opponent in Track A, the pinned baseline in Track B). The
+result is normalized so an exactly even score yields `0.0`, never `-0.0`.
 
 ### Why clamp?
 
@@ -78,9 +79,13 @@ round.
 report per opponent:
 
 - Per opponent: `performance = opponent_rating + delta_elo(clamped rate)`.
-  Ratings (nominal): BenchRandom 400, BenchGreedyCapture 600,
-  BenchMaterial1 800, BenchPST1 1000, BenchMiniMax2 1200,
-  BenchAlphaBeta3 1400. Unknown opponents default to 800.
+  Ratings come from `opponent_ratings` in `scoring.yaml` (nominal:
+  BenchRandom 400, BenchGreedyCapture 600, BenchMaterial1 800,
+  BenchPST1 1000, BenchMiniMax2 1200, BenchAlphaBeta3 1400). The round
+  runner merges the `rating` values of `anchor_opponents` entries
+  (SF18_UCI_Elo_1320/1600/1900/2200) into that table when not already
+  present, so optional anchor matches score the same way. Unknown opponents
+  default to 800.
 - `ladder_score` = mean of all non-null per-opponent performances.
 - `final_score = ladder_score - penalty_points`, rounded to 0.1.
 - Opponents with 0 games get null rate/delta/performance and are excluded
@@ -107,8 +112,19 @@ Example report (official round, 4 games per opponent, one timeout):
 ```
 
 (`per_opponent` shortened; a real official round has all six opponents.)
-The run's overall score is the best valid round — see
-`docs/leaderboard_policy.md`.
+
+### Leaderboard (`ceb.leaderboard/v1`)
+
+`compute_leaderboard(results_dir, track, include_quick=False)` scans
+`runs/*/state.json` and ranks runs by their best scored round. The official
+policy counts **official rounds only**; rounds recorded without a `mode`
+field count as official (legacy states). `include_quick=True`
+(CLI `ceb leaderboard compute --include-quick`, API
+`/api/leaderboard?include_quick=true`) is a diagnostic view that also ranks
+quick rounds — the CLI labels it as non-official and it must never be
+presented as an official ranking. The board JSON echoes the flag in an
+`include_quick` field, and each entry carries `official_rounds_played`
+alongside `rounds_played`. See `docs/leaderboard_policy.md`.
 
 ## Track B: delta Elo vs baseline (`ceb.score.track_b/v1`)
 
@@ -129,11 +145,12 @@ candidate Stockfish build against the pinned baseline (sf_18, cb3d4ee):
 ```
 
 With 0 games, `score_rate`, `delta_elo`, `delta_elo_ci95`, and
-`final_delta_elo` are null. **Implemented in v0.1:** this scoring module,
-the diff whitelist checker (`ceb track-b check-diff`), and
-`ceb track-b status`. **Planned, not implemented:** automated
-candidate-vs-baseline match orchestration — in v0.1 the W/D/L inputs come
-from matches you run yourself.
+`final_delta_elo` are null. `ceb track-b round run` produces this score
+automatically and embeds it in the round report
+(`ceb.track_b.round.report/v1`, operator-facing, full detail) next to a
+sanitized `feedback.json` (`ceb.track_b.feedback/v1`, aggregates only).
+**Planned, not implemented:** a fastchess/cutechess match-runner adapter —
+games currently run through the internal match runner.
 
 ## Reproducing the numbers
 

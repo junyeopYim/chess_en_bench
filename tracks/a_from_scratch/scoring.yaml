@@ -8,6 +8,28 @@ opponent_ratings:
   BenchMiniMax2: 1200
   BenchAlphaBeta3: 1400
 
+# Optional limited-strength anchor engines (P1.3). Anchors are NOT used by
+# default and are skipped gracefully when the engine binary is absent, so CI
+# and local runs never depend on Stockfish. To enable, add anchor names to a
+# round mode's `anchors` list below (e.g. anchors: [SF18_UCI_Elo_1320]).
+anchor_opponents:
+  SF18_UCI_Elo_1320:
+    engine: stockfish
+    uci_elo: 1320
+    rating: 1320
+  SF18_UCI_Elo_1600:
+    engine: stockfish
+    uci_elo: 1600
+    rating: 1600
+  SF18_UCI_Elo_1900:
+    engine: stockfish
+    uci_elo: 1900
+    rating: 1900
+  SF18_UCI_Elo_2200:
+    engine: stockfish
+    uci_elo: 2200
+    rating: 2200
+
 penalties:                # points subtracted per candidate fault
   illegal_move: 30
   timeout: 15
@@ -19,8 +41,12 @@ round_modes:
     games_per_opponent: 2
     movetime_ms: 50
     max_plies: 120
+    openings_limit: 2     # first N openings of the resolved suite
+    anchors: []
   official:               # consumes one unit of official round budget
     opponents: [BenchRandom, BenchGreedyCapture, BenchMaterial1, BenchPST1, BenchMiniMax2, BenchAlphaBeta3]
     games_per_opponent: 4
     movetime_ms: 200
     max_plies: 200
+    openings_limit: 6
+    anchors: []

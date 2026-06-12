@@ -19,10 +19,11 @@ the transposition table.
   baseline, with a 95% confidence interval. Faults cost Elo points per
   occurrence: illegal move 30, timeout 15, crash 25. A run has 3 official
   rounds; the best valid result counts.
-- Reference local match parameters:
-  `tracks/b_stockfish_opt/public/quick_eval_config.yaml`
-  (20 games, 100 ms/move, alternating colors, openings in
-  `public/quick_openings.pgn`).
+- Evaluation games are played by `ceb track-b round run`: paired openings
+  (each opening played as white and black), `Threads=1` `Hash=16` sent to
+  both engines, 100 ms per move by default. The public quick suite is
+  `tracks/b_stockfish_opt/public/quick_openings.jsonl`; official rounds may
+  use hidden openings, so do not tune to specific lines.
 
 ## Task
 
@@ -30,8 +31,8 @@ the transposition table.
    `third_party/stockfish` in place; the evaluator diffs candidate against
    that baseline).
 2. Modify only whitelisted search files to gain playing strength.
-3. Verify the candidate builds and runs, and that the diff check passes,
-   before submitting.
+3. Build both engines and self-score locally (see the loop below), iterating
+   until the diff check passes and delta Elo improves.
 
 ## Inputs
 
@@ -39,7 +40,7 @@ the transposition table.
 - `tracks/b_stockfish_opt/allowed_paths.txt` — the only editable files
 - `tracks/b_stockfish_opt/forbidden_paths.txt` — hard-forbidden paths
 - `tracks/b_stockfish_opt/patch_policy.yaml` — policy summary
-- `tracks/b_stockfish_opt/public/` — quick evaluation config and openings
+- `tracks/b_stockfish_opt/public/` — quick openings and reference parameters
 
 ## Constraints (violations invalidate the submission)
 
@@ -57,27 +58,31 @@ the transposition table.
   `./stockfish bench` must run to completion.
 - The candidate must remain a correct UCI engine: no illegal moves, no
   crashes, and it must respect time controls (timeouts are penalized).
-- Run the whitelist check before every submission and only submit when it
-  exits 0:
 
-  ```bash
-  ceb track-b check-diff \
-    --baseline third_party/stockfish \
-    --candidate <candidate-dir>
-  ```
+## Self-scoring loop
+
+Before every submission, run a local round; it performs the diff whitelist
+check first (a violation aborts before any game), verifies both UCI
+handshakes, plays the match, and writes a delta-Elo report:
+
+```bash
+ceb track-b round run \
+  --candidate-engine <candidate-dir>/src/stockfish \
+  --baseline-engine third_party/stockfish/src/stockfish \
+  --baseline-src third_party/stockfish \
+  --candidate-src <candidate-dir>
+```
+
+Read `runs/track_b_local/track_b_round_1/feedback.json` for your aggregate
+result (`final_delta_elo`, CI, faults). Increase `--games` for a tighter
+CI. Only submit when the command exits 0 with zero faults.
 
 ## Output format
 
 Submit:
 
 1. The candidate directory: a complete Stockfish source tree that differs
-   from the baseline only in whitelisted files and passes
-   `ceb track-b check-diff` (exit code 0).
+   from the baseline only in whitelisted files and passes the diff check
+   (`ceb track-b check-diff` exit code 0).
 2. A short summary (plain text or Markdown) listing each changed file, what
    was changed, and why you expect it to gain Elo.
-
-Note: in v0.1 there is no automated candidate-vs-baseline match
-orchestration. Self-test locally by playing games between your candidate
-build and the baseline build (manually or with an external runner) using the
-quick-eval parameters, then estimate strength with
-`ceb.scoring.track_b.compute_delta_elo_report`.

@@ -1,9 +1,10 @@
-# Security model (v0.1)
+# Security model
 
 chess_en_bench executes code it did not write: submitted engines (and their
 `build.sh`) are produced by the LLM agents under evaluation. Treat every
-submission as untrusted. This document states the threat model, what v0.1
-actually enforces in code, what it does not, and how operators should run it.
+submission as untrusted. This document states the threat model, what the
+harness actually enforces in code, what it does not, and how operators
+should run it.
 
 ## Threat model
 
@@ -18,83 +19,98 @@ simply buggy submissions may try to:
 - use the network (download a stronger engine, query an online engine, exfiltrate data),
 - exhaust CPU, memory, or disk.
 
-v0.1 mitigates the first four classes in code. The last three are **not**
-isolated in v0.1 and are handled by policy (`specs/forbidden_behaviors.md`)
-plus operator-level sandboxing.
+The first four classes are mitigated at the process level on every run. The
+last three are isolated only when you run with `--sandbox docker`; with the
+default `--sandbox none` they remain policy-only (`specs/forbidden_behaviors.md`).
 
-## Enforced in v0.1
+## Enforced at the process level (every run)
 
 All engine process handling goes through `bench/ceb/uci/client.py`
 (`UCIClient`). Concrete guarantees, verifiable in that file:
 
 - **argv-only spawning, never a shell.** `UCIClient(command)` raises
   `TypeError` if `command` is a string; processes start via
-  `subprocess.Popen(argv_list)` with no `shell=True` anywhere. No submission
-  string is ever interpolated into a shell command.
+  `subprocess.Popen(argv_list)` with no `shell=True` anywhere.
 - **Every read has a timeout.** `read_line`, `expect`, `handshake`, `sync`,
   `go_movetime`, and `go_perft` all take deadlines and raise `EngineTimeout`
   / `EngineCrashed` instead of blocking forever.
 - **Bounded stdout intake.** A reader thread feeds a queue capped at 10,000
   lines (`_QUEUE_MAX_LINES`), each truncated to 8,192 characters
-  (`_MAX_LINE_CHARS`). A flooding engine blocks on its own pipe
-  (backpressure); it cannot grow harness memory without bound.
-- **stderr is discarded** (`stderr=subprocess.DEVNULL`), so engines cannot
-  flood or spoof the harness through that channel.
-- **Process-group teardown.** On POSIX the engine starts in its own session
-  (`start_new_session=True`). `close()` sends `quit`, waits briefly, then
-  escalates SIGTERM → SIGKILL to the whole process group, so children the
-  engine spawned are killed too.
+  (`_MAX_LINE_CHARS`). A flooding engine blocks on its own pipe.
+- **stderr is discarded** (`stderr=subprocess.DEVNULL`).
+- **Process-group teardown.** On POSIX the engine starts in its own session;
+  `close()` escalates `quit` → SIGTERM → SIGKILL to the whole process group.
 - **build.sh runs bounded.** The gate (`bench/ceb/gate/gate_runner.py`)
-  invokes it as `["bash", build.sh]` with `cwd` set to the workspace, output
-  captured, and a 120-second timeout — but on the host, with your
-  privileges (see below).
-- **Every move is oracle-validated.** The internal match runner
-  (`bench/ceb/match/internal_runner.py`) checks each move against
-  `bench/ceb/chess/`; illegal output is recorded as a fault, never replayed
-  blindly.
+  invokes it as `["bash", build.sh]` with output captured and a 120-second
+  timeout.
+- **Every move is oracle-validated** against `bench/ceb/chess/`; illegal
+  output is recorded as a fault, never replayed blindly.
+- **Gate failure details quote row ids only** — bestmove/perft check
+  messages never include FENs, so hidden eval-pack positions cannot leak
+  through reports or agent feedback.
 
-## NOT enforced in v0.1
+## Docker sandbox (`--sandbox docker`)
 
-Be explicit about the gaps. The harness runs submissions as ordinary child
-processes of your user on your machine. There is **no**:
-
-- filesystem isolation — an engine (or `build.sh`) can read and write
-  anything your user can, including `bench/ceb/`, `runs/`, and `$HOME`;
-- network isolation — outbound connections are not blocked or detected;
-- CPU, memory, or disk quota — only wall-clock timeouts exist;
-- privilege separation — no dedicated user, namespaces, or seccomp.
-
-Container sandboxing is planned, not implemented. Until then, a pattern like
-this is the recommended way to wrap an evaluation host:
+`ceb gate run --sandbox docker` and `ceb round run --sandbox docker`
+re-invoke `ceb` inside a locked-down container
+(`bench/ceb/sandbox/docker_runner.py`, image
+`chess-en-bench-evaluator:0.2` from `infra/docker/evaluator.Dockerfile`).
+Build the image once:
 
 ```sh
-docker run --rm \
-  --network none \
-  --memory 2g --cpus 2 --pids-limit 256 \
-  --read-only --tmpfs /tmp \
-  -v "$PWD":/bench:ro \
-  -v "$PWD/runs":/bench/runs \
-  -w /bench \
-  python:3.13-slim \
-  bash -c "pip install -e . && ceb gate run --track A --workspace runs/demo/workspace"
+bash scripts/build_evaluator_image.sh
+ceb gate run --track A --workspace runs/demo/workspace --sandbox docker
+ceb round run --track A --workspace runs/demo/workspace --round 1 --quick --sandbox docker
 ```
 
-Key properties: `--network none` (no egress), read-only repo mount with only
-`runs/` writable, hard memory/CPU/pid limits, and `--rm` so nothing persists.
-Adapt the image to include a C/C++ toolchain if submissions compile native
-engines.
+The runner constructs the `docker run` argv itself; exact enforcement:
+
+- `--network none` — no egress at all.
+- `--read-only` rootfs plus `--tmpfs /tmp` — the container filesystem is
+  immutable.
+- `--cpus 2 --memory 2g --pids-limit 256` — resource caps (defaults in
+  `DEFAULT_LIMITS`).
+- `--security-opt no-new-privileges` and `--user <host-uid>:<host-gid>` —
+  no privilege escalation, never root in the container.
+- The repo is mounted **read-only** at `/bench` (`CEB_ROOT=/bench`); only
+  `runs/` and the submission workspace (at `/sandbox/workspace`) are
+  writable. An engine cannot modify `bench/ceb/` or opponents.
+- argv lists everywhere — untrusted paths are never shell-interpolated.
+- Mount-path validation: a resolved host path containing `:` or a newline
+  (the `-v` field separator) is rejected with `SandboxError`, so paths
+  cannot smuggle extra mount options.
+- `CEB_INSIDE_SANDBOX=1` recursion guard — a nested `--sandbox docker`
+  refuses to start a container inside the container.
+- Missing docker or a missing image fails with an actionable `SandboxError`
+  (install Docker / run the build script), never a silent host fallback.
+
+## NOT enforced
+
+- **Host execution is still the default.** `--sandbox none` runs submissions
+  as ordinary child processes of your user — no filesystem, network, or
+  resource isolation. Nothing forces you to pass `--sandbox docker`.
+- **No seccomp/AppArmor profile beyond Docker's defaults**, and no user
+  namespace remapping.
+- **`--eval-pack` is not supported with `--sandbox docker`** (the CLI
+  rejects the combination); private-pack evaluations currently run on the
+  host.
+- **Engine stdin writes are unbounded.** `UCIClient.send()` has no timeout;
+  an engine that never drains stdin can block a harness write on a full pipe
+  (reads are deadline-protected, writes are not).
+- **No disk quota** on the writable mounts (`runs/` and the workspace).
 
 ## Operator guidance
 
-- Run untrusted submissions **only in disposable environments**: a container
-  as above, a throwaway VM, or at minimum a dedicated low-privilege user.
-  Never on a machine holding credentials you care about.
-- Never run the harness as root.
-- Skim `build.sh` and the workspace before `ceb gate run`; it executes with
-  your privileges in v0.1.
+- **Use `--sandbox docker` for any submission you did not write.** Build the
+  evaluator image first; keep `--sandbox none` for trusted local debugging.
+- If you must run on the host, use a disposable environment (throwaway VM or
+  dedicated low-privilege user), never a machine holding credentials.
+- Never run the harness as root; the sandbox also refuses root inside the
+  container by mapping your uid:gid.
+- Skim `build.sh` and the workspace before a host-mode `ceb gate run`; it
+  executes with your privileges there.
 - After a suspicious run, discard the environment rather than cleaning it.
-- Keep result directories (`runs/`, `artifacts/`) on a path the engine had
-  no reason to touch, and treat them as data, not code.
+- Treat `runs/` and `artifacts/` as data, not code.
 - Policy-level rules for submissions (no network, no reading harness
   internals, etc.) and their consequences are normative in
   `specs/forbidden_behaviors.md`.

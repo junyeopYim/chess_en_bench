@@ -58,6 +58,25 @@ def test_gate_fails_missing_workspace(tmp_path):
     assert report.checks[0].status == "fail"
 
 
+def test_gate_never_echoes_fens_from_bad_pack_rows():
+    """Defense in depth: even if an invalid FEN row reaches the gate (packs
+    validate at load, but a pack object can be built directly), the failure
+    detail quotes the row id only — never the position."""
+    from ceb.eval_pack import EvalPack
+
+    secret_placement = "2r3k1/5ppp/8/8/8/8/5PPP/2R3K1"
+    pack = EvalPack(
+        name="direct", source="public+private",
+        fens=[{"id": "secret_row", "fen": secret_placement + " w - - 0 x"}],
+        perft=[], openings=[])
+    report = run_gate(EXAMPLES / "minimal_uci_engine_python", root=REPO_ROOT,
+                      quick_match=False, eval_pack=pack)
+    assert not report.passed
+    dumped = report.to_json() + report.human_summary()
+    assert "secret_row" in dumped
+    assert secret_placement not in dumped
+
+
 def test_gate_report_json_shape():
     report = run_gate(EXAMPLES / "minimal_uci_engine_python", root=REPO_ROOT,
                       quick_match=False)

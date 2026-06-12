@@ -2,7 +2,8 @@
 
 This is the binding contract between a submission workspace and the
 benchmark harness. The gate (`ceb gate run`) enforces it mechanically; rounds
-re-run the gate before any match. Behavioral prohibitions are in
+re-run the gate before any match, and official rounds always run it in
+**strict mode** (see the perft section below). Behavioral prohibitions are in
 `specs/forbidden_behaviors.md`. A reference submission that satisfies this
 contract lives in `examples/submissions/minimal_uci_engine_python/`.
 
@@ -68,6 +69,13 @@ harness validates each one against its internal oracle.
 
 ## Match-time behavior
 
+- Games start from the opening suite, not always the initial position: the
+  harness resolves each opening (public suite:
+  `tracks/a_from_scratch/public/openings_public.jsonl`, optionally extended
+  by an operator-mounted hidden pack) to a start position and, unless it is
+  the standard start, supplies it as `position fen <FEN> [moves ...]`. Your
+  engine MUST handle arbitrary legal FENs — castling rights, en passant
+  square, move counters — and cannot assume startpos.
 - Before every move the harness re-sends the full position
   (`position startpos moves <all moves so far>` or `position fen ... moves
   ...`), then `go movetime N`. Do not rely on incremental state.
@@ -78,10 +86,16 @@ harness validates each one against its internal oracle.
 - Faults end the game as a loss and are penalized in the round score:
   illegal move (−30 points), timeout (−15), crash/EOF on stdout (−25).
 
-## Optional: `go perft <depth>` extension
+## `go perft <depth>` extension — required for official rounds
 
-Strongly recommended (the gate warns when missing, and fails only on wrong
-counts). On `go perft D`, reply with one line:
+The gate runs in two modes. The default public gate only warns when the
+extension is missing (and fails on wrong counts). The strict gate
+(`ceb gate run --strict` — and **always** the gate official rounds run
+first) makes it MANDATORY: missing support or a wrong count fails the gate,
+which aborts the round before any game. A submission without a correct
+`go perft` can pass the public gate but cannot play official rounds.
+
+On `go perft D`, reply with one line:
 
     info string perft <nodes>
 
@@ -93,11 +107,15 @@ counts). On `go perft D`, reply with one line:
 
 ```sh
 ceb gate run --track A --workspace <dir> --json-out gate.json   # exit 0 = pass
+ceb gate run --track A --workspace <dir> --strict               # official-round policy
 ceb gate run --track A --workspace <dir> --no-match             # skip mini match
 ```
 
 The gate is unlimited and never consumes round budget. Checks run in order
 (format, build, engine, handshake, position, bestmove, perft, time,
-mini match vs BenchRandom); the report (`ceb.gate.report/v1`) names the first
-failing check with details. Counterexamples that fail this contract are in
-`examples/submissions/broken_engine_examples/`.
+mini match vs BenchRandom); the report (`ceb.gate.report/v1`, which records
+its mode in a `strict` field) names the first failing check with details. In
+strict mode `perft` is a hard check: a failure skips the remaining checks.
+Failure details reference test rows by id only, never by FEN, so hidden
+eval-pack positions cannot leak. Counterexamples that fail this contract are
+in `examples/submissions/broken_engine_examples/`.

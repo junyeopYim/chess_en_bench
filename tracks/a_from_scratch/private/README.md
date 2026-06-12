@@ -1,50 +1,54 @@
-# Track A — private evaluation data (placeholder)
+# Track A — private evaluation packs (mount point)
 
-**v0.1 ships no hidden data.** This directory is intentionally empty apart
-from this README and exists only to keep the path in git. No code in
-`bench/ceb/` reads from it today; the gate, rounds, and scoring run entirely
-on the public data in `../public/` and the public opponent pool.
+**This repository ships no hidden data.** This directory is empty apart from
+this README and exists to keep the conventional mount path in git. The
+loader, however, is real: `bench/ceb/eval_pack.py` reads operator-managed
+private pack directories and merges them with the public data.
 
-## Purpose
+## Pack layout
 
-In a hosted deployment this is the mount point for hidden evaluation packs:
-data the operator uses to evaluate submissions but never returns to the
-agent. Round results that depend on anything mounted here must still reach
-the agent only through the sanitized feedback contract
-(`specs/round_feedback_contract.md`) — aggregate W/D/L, score rates, fault
-counts, and scores; never positions or move logs.
+A private pack is a directory containing any of (at least one required):
 
-## What would mount here, and the interface it must follow
+- `fen_hidden.jsonl` — extra bestmove-legality positions. Same row format as
+  `../public/fen_examples.jsonl`: `{"id", "fen", "tags"}`.
+- `perft_hidden.jsonl` — extra perft expectations. Same row format as
+  `../public/perft_examples.jsonl`: `{"id", "fen", "depth", "nodes"}`.
+- `openings_hidden.jsonl` — extra opening lines in the canonical JSONL
+  format (`bench/ceb/match/openings.py`):
+  `{"id", "fen": "startpos"|FEN, "moves": [UCI...], "tags": [...]}`.
+  Every move is oracle-validated; an illegal move fails the load loudly.
+- `manifest.json` — optional:
+  `{"name": ..., "openings_mode": "extend"|"replace"}`. `extend` (default)
+  appends hidden openings to the public suite; `replace` substitutes it.
+  FEN and perft rows always extend the public sets.
 
-Hidden packs reuse the public file formats exactly, so the harness needs no
-new parsers:
+Rows in private files are always assigned ids when missing
+(`hidden_fen_<line>`, `hidden_perft_<line>`, `opening_<line>`), so gate
+failure details, round reports, and feedback can reference hidden rows by id
+without ever quoting a hidden FEN or move.
 
-- `fen_hidden.jsonl` — extra bestmove-legality FEN suites for the official
-  evaluation. Same JSONL schema as `../public/fen_examples.jsonl`:
-  one object per line with `id` (string), `fen` (string), `tags` (list of
-  strings).
-- `perft_hidden.jsonl` — extra perft positions with expected node counts.
-  Same schema as `../public/perft_examples.jsonl`: `id`, `fen`, `depth`
-  (int), `nodes` (int).
-- `openings_hidden.pgn` — hidden opening lines for round matches. Same shape
-  as `../public/openings_public.pgn`: standard PGN headers, a short move
-  sequence, result `*`.
-- `opponents/` — hidden opponents beyond the public pool. Each must:
-  - speak UCI and be launchable argv-only (no shell), like the public pool's
-    `python -m ceb.match.opponents <Name>`;
-  - be deterministic given `setoption name Seed value N`, so the internal
-    match runner (`bench/ceb/match/internal_runner.py`) can seed each game;
-  - have a nominal rating registered in `../scoring.yaml` under
-    `opponent_ratings`, since Track A performance is
-    `opponent_rating + delta_elo`.
+## Resolution rules
+
+- `--eval-pack <dir>` on `ceb gate run`, `ceb round run`, and
+  `ceb track-b round run` loads a pack explicitly, anywhere.
+- The `CEB_PRIVATE_EVAL_DIR` environment variable is consumed only by
+  evaluations that opt in (`allow_env`): official rounds and the strict
+  gate. The standalone public gate and quick rounds never read it.
+- Nothing reads this directory implicitly — a deployment must point the flag
+  or env var at it (or at any other operator-managed path).
+- `--eval-pack` is not supported together with `--sandbox docker`.
+
+A fake demo pack with the exact layout lives at
+`examples/eval_packs/tiny_private/`; the test suite exercises it.
 
 ## Status
 
-| Piece | v0.1 |
+| Piece | State |
 |---|---|
-| Public gate, rounds, scoring, opponents | Implemented |
-| This directory wired into any code path | Not implemented |
-| Hidden FEN/perft/openings/opponent packs | Planned (hosted deployments) |
+| Private pack loader (`bench/ceb/eval_pack.py`) | Implemented |
+| Demo pack + tests (`examples/eval_packs/tiny_private/`) | Implemented |
+| Real hidden FEN/perft/opening data | Not shipped — operator-managed, mounted per deployment |
+| Hidden opponents | Not part of the pack interface (anchor engines are configured in `../scoring.yaml` instead) |
 
-Until a deployment mounts real packs here, everything the benchmark uses is
-public and inspectable.
+Results that depend on hidden packs reach the agent only through the
+sanitized feedback contract (`specs/round_feedback_contract.md`).

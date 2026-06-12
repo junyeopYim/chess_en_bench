@@ -27,7 +27,7 @@ def delta_elo(rate):
     """Elo difference implied by a (clamped) score rate."""
     if not 0.0 < rate < 1.0:
         raise ValueError("rate must be strictly inside (0, 1); clamp first")
-    return -400.0 * math.log10(1.0 / rate - 1.0)
+    return -400.0 * math.log10(1.0 / rate - 1.0) + 0.0  # +0.0 normalizes -0.0
 
 
 def delta_elo_from_wdl(wins, draws, losses):

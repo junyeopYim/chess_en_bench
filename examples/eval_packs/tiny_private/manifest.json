@@ -1,0 +1,5 @@
+{
+  "name": "tiny_private_example",
+  "openings_mode": "extend",
+  "note": "Fake demonstration pack used by the test suite. Real hidden evaluation packs follow this exact layout but are never committed to the repository."
+}

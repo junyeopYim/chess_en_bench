@@ -1,13 +1,20 @@
 # UCI Extension: `go perft <depth>`
 
 A small benchmark-specific extension to the minimal UCI subset
-(`specs/uci_minimal.md`) that lets the public gate verify your move
-generator directly. It is **recommended, not mandatory**: the gate config
-ships `perft_required: false` (`tracks/a_from_scratch/public/gate_config.yaml`).
+(`specs/uci_minimal.md`) that lets the gate verify your move generator
+directly. The requirement is two-tier:
 
-Implementing it is strongly advised — a wrong move generator otherwise
-only surfaces later as illegal-move faults in matches, which cost games
-and penalty points.
+- **Public gate** (`ceb gate run`, the default): recommended. Missing
+  support is a `warn` — the gate still passes — but a wrong count is a
+  `fail`. The shipped config has `perft_required: false`
+  (`tracks/a_from_scratch/public/gate_config.yaml`).
+- **Strict gate** (`ceb gate run --strict`; official rounds always run the
+  strict gate before any game): REQUIRED. Missing support **or** a wrong
+  count fails the gate, and a failing gate aborts the round without
+  consuming budget. Without this extension you cannot play official rounds.
+
+Beyond the gate, a wrong move generator surfaces as illegal-move faults in
+matches, which cost games and penalty points — implement perft early.
 
 ## Command
 
@@ -42,25 +49,30 @@ Do not print a `bestmove` line in response to `go perft`.
 ## Gate behavior
 
 The gate's `perft` check (`check_perft` in `bench/ceb/gate/gate_runner.py`)
-runs every entry of `tracks/a_from_scratch/public/perft_examples.jsonl`
-with `depth <= perft_max_depth` (default 3) and compares against
-oracle-verified counts:
+runs every perft row of the resolved eval pack with `depth <=
+perft_max_depth` (default 3) and compares against oracle-verified counts.
+The public rows are `tracks/a_from_scratch/public/perft_examples.jsonl`;
+strict (official-round) evaluations may add hidden rows from an
+operator-mounted eval pack.
 
-- **Unsupported -> WARN.** The engine is treated as not supporting the
-  extension when it answers `go perft` with a `bestmove` line (i.e. it
-  started a normal search), or when it produces no recognizable reply
-  within 20 s (the harness then sends `stop` and drains any late
-  `bestmove`). The check is marked `warn`; the gate still passes.
-- **Wrong count -> FAIL.** Any node count that differs from the expected
-  value fails the check, and a failed check fails the overall gate
-  (`passed` requires every non-skipped, non-warn check to pass — see
-  `bench/ceb/gate/reports.py`). Later checks still run so you get a full
-  report.
-- With `perft_required: true` in the gate config, unsupported would also
-  fail; the shipped default is `false`.
+- **Unsupported -> WARN public, FAIL strict.** The engine is treated as not
+  supporting the extension when it answers `go perft` with a `bestmove`
+  line (i.e. it started a normal search), or when it produces no
+  recognizable reply within 20 s (the harness then sends `stop` and drains
+  any late `bestmove`). The strict gate forces `perft_required: true`
+  (setting it in the gate config makes the public gate equally demanding).
+- **Wrong count -> FAIL in both modes.** Any node count that differs from
+  the expected value fails the check, and a failed check fails the overall
+  gate (`passed` requires every non-skipped, non-warn check to pass — see
+  `bench/ceb/gate/reports.py`).
+- In the public gate, `perft` is a soft check: later checks still run so
+  you get a full report. In strict mode it is a hard check — a failure
+  skips the remaining checks. Failure details quote row ids only (e.g.
+  `perft mismatch on hidden_perft_2 ...`), never FENs.
 
-Practical consequence: if you implement the extension, it must be correct.
-Answering with made-up numbers is strictly worse than not implementing it.
+Practical consequence: implement the extension and make it correct.
+Answering with made-up numbers is strictly worse than not implementing it —
+and not implementing it caps you at the public gate and quick rounds.
 
 ## Sample transcript
 
@@ -86,11 +98,11 @@ depth 2 = 400, depth 3 = 8902.
 
 ## Testing locally
 
-All test positions and expected counts are public:
+All public test positions and expected counts are available:
 
 ```
 cat tracks/a_from_scratch/public/perft_examples.jsonl
-ceb gate run --track A --workspace <your-workspace>
+ceb gate run --track A --workspace <your-workspace> --strict
 ```
 
 The repository's oracle can generate reference counts for any position via

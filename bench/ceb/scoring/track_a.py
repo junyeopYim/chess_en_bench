@@ -74,8 +74,12 @@ def compute_round_score(match_reports, opponent_ratings=None, penalties=None):
     }
 
 
-def compute_leaderboard(results_dir, track="A"):
+def compute_leaderboard(results_dir, track="A", include_quick=False):
     """Scan runs/*/state.json + round reports and rank by best valid round.
+
+    Official policy: only official rounds count. include_quick=True is a
+    diagnostic mode that also considers quick rounds; never use it for
+    official rankings.
 
     Returns {"schema": ..., "track": ..., "entries": [...]}, best first.
     """
@@ -89,21 +93,28 @@ def compute_leaderboard(results_dir, track="A"):
                 continue
             if state.get("track", "A").upper() != track.upper():
                 continue
+            rounds = state.get("rounds", [])
             best = None
-            for rnd in state.get("rounds", []):
+            for rnd in rounds:
                 score = rnd.get("score")
+                mode = rnd.get("mode", "official")
                 if score is None:
+                    continue
+                if not include_quick and mode != "official":
                     continue
                 if best is None or score > best["score"]:
                     best = {"round": rnd.get("round"), "score": score,
-                            "mode": rnd.get("mode")}
+                            "mode": mode}
             entries.append({
                 "run_id": state.get("run_id", state_path.parent.name),
                 "workspace": state.get("workspace"),
                 "gate_passed": bool(state.get("gate", {}).get("passed")),
-                "rounds_played": len(state.get("rounds", [])),
+                "rounds_played": len(rounds),
+                "official_rounds_played": sum(
+                    1 for r in rounds if r.get("mode", "official") == "official"),
                 "best_round": best,
                 "score": best["score"] if best else None,
             })
     entries.sort(key=lambda e: (e["score"] is None, -(e["score"] or 0)))
-    return {"schema": "ceb.leaderboard/v1", "track": track.upper(), "entries": entries}
+    return {"schema": "ceb.leaderboard/v1", "track": track.upper(),
+            "include_quick": include_quick, "entries": entries}

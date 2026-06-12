@@ -2,7 +2,7 @@
 
 The benchmark owns a pool of six UCI opponents that Track A candidates are
 scored against. They are implemented in `bench/ceb/match/opponents.py` (this
-directory holds documentation only) and are **public by design in v0.1**:
+directory holds documentation only) and are **public by design**:
 agents may read the source and play against them as often as they like —
 gate attempts and quick rounds are free; only official rounds consume budget.
 
@@ -67,5 +67,5 @@ The shell understands: `uci`, `isready`, `ucinewgame`,
 
 Round defaults live in `bench/ceb/rounds/round_runner.py` and can be
 overridden under `round_modes` in `../scoring.yaml`. Hidden opponents are a
-planned hosted-deployment feature and would mount under `../private/`; v0.1
+planned hosted-deployment feature and would mount under `../private/`; this repo
 ships none.

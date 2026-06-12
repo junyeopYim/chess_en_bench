@@ -12,6 +12,11 @@ Checks (in order; a hard failure skips the remaining heavy checks):
   mini_match  short match vs BenchRandom: no candidate faults
 
 The gate may be run unlimited times and never consumes official round budget.
+
+Strict mode (run_gate(strict=True), used by official rounds): the 'go perft'
+extension is REQUIRED — missing support or wrong counts fail the gate. An
+eval pack (ceb.eval_pack) can extend the FEN/perft sets; failure details
+quote row ids only, never raw FENs, so hidden positions cannot leak.
 """
 
 import json
@@ -85,13 +90,17 @@ def _merged_gate_config(root):
 
 
 class _Gate:
-    def __init__(self, workspace, track, root, quick_match):
+    def __init__(self, workspace, track, root, quick_match, strict, pack):
         self.workspace = Path(workspace).resolve()
         self.root = root
+        self.strict = strict
+        self.pack = pack
         self.config = _merged_gate_config(root)
+        if strict:
+            self.config["perft_required"] = True
         if not quick_match:
             self.config["mini_match"]["enabled"] = False
-        self.report = GateReport(track, self.workspace)
+        self.report = GateReport(track, self.workspace, strict=strict)
         self.engine_cmd = None
 
     def _timed(self, check_id, name, fn):
@@ -174,15 +183,24 @@ class _Gate:
         movetime = int(self.config["bestmove_movetime_ms"])
         grace = int(self.config["bestmove_grace_ms"])
         max_failures = int(self.config["max_bestmove_failures"])
-        fens = load_public_fens(self.root)
         failures = []
         tested = 0
         with self._client() as client:
             client.handshake(timeout=float(self.config["handshake_timeout_s"]))
             client.new_game()
-            for row in fens:
+            for i, row in enumerate(self.pack.fens):
                 fen = row["fen"]
-                board = parse_fen(fen)
+                row_id = row.get("id") or "fen_%d" % i  # ids only: never leak FENs
+                try:
+                    board = parse_fen(fen)
+                except ValueError:
+                    # Never echo the FEN: hidden-pack rows must not leak
+                    # through error messages.
+                    failures.append("%s: invalid FEN row in eval pack "
+                                    "(content withheld)" % row_id)
+                    if len(failures) >= max_failures:
+                        break
+                    continue
                 legal = {m.uci() for m in generate_legal(board)}
                 if not legal:
                     continue  # terminal positions are not bestmove material
@@ -191,37 +209,38 @@ class _Gate:
                     client.set_position(fen)
                     best = client.go_movetime(movetime, grace_ms=grace)
                 except EngineError as exc:
-                    failures.append("%s: %s" % (row.get("id", fen), exc))
+                    failures.append("%s: %s" % (row_id, exc))
                 else:
                     if best not in legal:
-                        failures.append("%s: illegal bestmove %r"
-                                        % (row.get("id", fen), best))
+                        failures.append("%s: illegal bestmove %r" % (row_id, best))
                 if len(failures) >= max_failures:
                     break
         if failures:
             return STATUS_FAIL, "; ".join(failures[:3])
-        return STATUS_PASS, "legal bestmove on %d public positions" % tested
+        return STATUS_PASS, "legal bestmove on %d positions" % tested
 
     def check_perft(self):
         required = bool(self.config["perft_required"])
         max_depth = int(self.config["perft_max_depth"])
-        rows = [r for r in load_public_perft(self.root) if r["depth"] <= max_depth]
+        rows = [r for r in self.pack.perft if r["depth"] <= max_depth]
         with self._client() as client:
             client.handshake(timeout=float(self.config["handshake_timeout_s"]))
             checked = 0
-            for row in rows:
+            for i, row in enumerate(rows):
+                row_id = row.get("id") or "perft_%d" % i  # ids only: never leak FENs
                 client.set_position(row["fen"])
                 client.sync()
                 nodes = client.go_perft(row["depth"], timeout=20.0)
                 if nodes is None:
-                    msg = ("'go perft' extension not supported "
-                           "(recommended, see specs/uci_extension_perft.md)")
+                    msg = ("'go perft' extension not supported (%s, see "
+                           "specs/uci_extension_perft.md)"
+                           % ("required in strict mode" if required else "recommended"))
                     return (STATUS_FAIL if required else STATUS_WARN), msg
                 expected = row["nodes"]
                 if nodes != expected:
                     return STATUS_FAIL, ("perft mismatch on %s depth %d: got %d, "
-                                         "expected %d" % (row.get("id", row["fen"]),
-                                                          row["depth"], nodes, expected))
+                                         "expected %d" % (row_id, row["depth"],
+                                                          nodes, expected))
                 checked += 1
                 client.sync()
         return STATUS_PASS, "perft verified on %d position/depth pairs" % checked
@@ -275,7 +294,7 @@ class _Gate:
             ("handshake", "UCI handshake", self.check_handshake, True),
             ("position", "position commands", self.check_position, True),
             ("bestmove", "legal bestmove", self.check_bestmove, True),
-            ("perft", "perft extension", self.check_perft, False),
+            ("perft", "perft extension", self.check_perft, self.strict),
             ("time", "time management", self.check_time_management, True),
             ("mini_match", "mini match smoke", self.check_mini_match, True),
         ]
@@ -291,13 +310,22 @@ class _Gate:
         return self.report
 
 
-def run_gate(workspace, track="A", root=None, quick_match=True):
-    """Run the public gate against a submission workspace. Returns GateReport."""
+def run_gate(workspace, track="A", root=None, quick_match=True, strict=False,
+             eval_pack=None):
+    """Run the gate against a submission workspace. Returns GateReport.
+
+    strict: official-round policy — 'go perft' becomes mandatory.
+    eval_pack: a ceb.eval_pack.EvalPack supplying the FEN/perft sets;
+    defaults to the public pack.
+    """
     if root is None:
         root = paths.find_repo_root()
     if str(track).upper() not in ("A", "A_FROM_SCRATCH"):
         raise ValueError("the public gate currently supports track A only")
-    return _Gate(workspace, "A", root, quick_match).run()
+    if eval_pack is None:
+        from ceb.eval_pack import load_public_pack
+        eval_pack = load_public_pack(root)
+    return _Gate(workspace, "A", root, quick_match, strict, eval_pack).run()
 
 
 def save_gate_report(report, out_path=None, root=None):

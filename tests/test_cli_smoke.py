@@ -4,9 +4,25 @@ from pathlib import Path
 
 import pytest
 
-from ceb.cli import main
+from ceb.cli import build_parser, main
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_v02_flags_parse():
+    parser = build_parser()
+    args = parser.parse_args(["gate", "run", "--workspace", "x", "--strict",
+                              "--sandbox", "docker", "--eval-pack", "p"])
+    assert args.strict and args.sandbox == "docker" and args.eval_pack == "p"
+    args = parser.parse_args(["round", "run", "--workspace", "x", "--round",
+                              "1", "--quick", "--sandbox", "none"])
+    assert args.sandbox == "none"
+    args = parser.parse_args(["leaderboard", "compute", "--include-quick"])
+    assert args.include_quick
+    args = parser.parse_args(["track-b", "round", "run",
+                              "--candidate-engine", "a",
+                              "--baseline-engine", "b", "--games", "4"])
+    assert args.games == 4
 
 
 def test_doctor_runs(capsys):
@@ -25,7 +41,12 @@ def test_version_flag():
 def test_leaderboard_compute_empty(tmp_path, capsys):
     assert main(["leaderboard", "compute", "--track", "A",
                  "--results", str(tmp_path)]) == 0
-    assert "no scored runs" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no scored runs" in out
+    assert "official rounds only" in out
+    assert main(["leaderboard", "compute", "--track", "A",
+                 "--results", str(tmp_path), "--include-quick"]) == 0
+    assert "quick rounds INCLUDED" in capsys.readouterr().out
 
 
 def test_workspace_prepare(tmp_path, capsys):

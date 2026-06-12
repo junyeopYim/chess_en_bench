@@ -1,9 +1,9 @@
 # Reproducibility
 
-What makes a chess_en_bench v0.1 run repeatable, what is persisted so you can
+What makes a chess_en_bench run repeatable, what is persisted so you can
 audit it later, and where determinism honestly ends.
 
-## Implemented in v0.1
+## Implemented
 
 ### Per-game seeds
 
@@ -15,55 +15,94 @@ and `play_game` sends it to **both** engines before the first move:
 
 Seed assignment by context:
 
-- Official/quick rounds (`bench/ceb/rounds/round_runner.py`):
+- Official/quick rounds (`bench/ceb/rounds/round_runner.py`) and Track B
+  rounds (`bench/ceb/track_b/round_runner.py`):
   `base_seed = 1000 * round_number`. Re-running the same round number replays
   the same seeds.
 - Gate mini match (`bench/ceb/gate/gate_runner.py`): the `play_match` default,
   `base_seed = 1`.
 
 The benchmark opponents (`python -m ceb.match.opponents <Name>`) implement the
-`Seed` UCI option and reset their `random.Random` from it, so their move
-choices are a deterministic function of seed and position. Candidate engines
-that reject `setoption` are tolerated — the runner ignores the failure.
+`Seed` UCI option and reset their `random.Random` from it. Candidate engines
+that reject `setoption` are tolerated. Colors alternate deterministically
+(candidate is White in even-indexed games); draw adjudication is rule-based
+(fifty-move rule, `max_plies` cap), not judgment-based.
 
-Colors alternate deterministically: the candidate is White in even-indexed
-games (0-based). Draw adjudication is rule-based (fifty-move rule, `max_plies`
-cap), not judgment-based.
+### Deterministic openings
+
+Start positions come from a validated JSONL suite
+(`bench/ceb/match/openings.py`); every move of every opening is oracle-checked
+at load time, so a corrupt suite raises `OpeningError` instead of silently
+shifting positions. Selection is pure arithmetic, no randomness:
+
+- A round mode takes the first `openings_limit` openings of the resolved
+  suite (quick 2, official 6 — `tracks/a_from_scratch/scoring.yaml`).
+- Opponent `j` gets `rotate_suite(suite, pairs, j * pairs)` — a fixed
+  wrapping window, so the round covers the whole suite and the same opponent
+  always sees the same openings.
+- Games are played in pairs: consecutive games reuse one opening with colors
+  swapped, so the candidate plays each opening as both White and Black.
+
+Match reports record the suite (`"openings"`) and each game's `opening_id`;
+round reports record `"openings_used"`.
+
+### Eval packs are part of the evaluation conditions
+
+Official rounds and the strict gate resolve an eval pack
+(`bench/ceb/eval_pack.py`): public data plus an optional private directory
+(`--eval-pack`, or `CEB_PRIVATE_EVAL_DIR` for official/strict runs). The
+pack's FEN, perft, and opening contents change gate outcomes and round start
+positions, so **two runs are comparable only under the same pack**. Version
+your private packs: give each revision a stable `manifest.json` `"name"` —
+the round report's `"eval_pack"` block records the name, source, and row
+counts, which is how you audit what a score was measured against.
 
 ### Pinned Track B baseline
 
 `tracks/b_stockfish_opt/stockfish.lock` pins Stockfish 18, tag `sf_18`, commit
-`cb3d4ee` — never a moving branch. `scripts/setup_stockfish.sh` checks out that
-tag into `third_party/stockfish` and **fails hard** if `HEAD` does not match
-the pinned commit. Every Track B diff check therefore compares against the
-same baseline source.
+`cb3d4ee` — never a moving branch. `scripts/setup_stockfish.sh` checks out
+that tag and fails hard on a commit mismatch. Track B rounds
+(`ceb track-b round run`) check the diff whitelist before any game, then play
+paired-opening alternating-color games with `Threads=1 Hash=16` sent to both
+engines. Identical compiler flags and build conditions for both binaries are
+required by policy for real evaluations — documented, not enforced by code.
 
 ### Persisted run metadata
 
 Everything an evaluation produces lands under `runs/<run_id>/`:
 
 - `state.json` (`ceb.run.state/v1`) — gate status/attempts, official-round
-  budget, and the full round trajectory with scores.
-- `gate_report.json` (`ceb.gate.report/v1`) — per-check results.
-- `round_<N>/report.json` (`ceb.round.report/v1`) — mode, per-opponent
-  totals, faults, score.
+  budget, full round trajectory with scores.
+- `gate_report.json` (`ceb.gate.report/v1`) — per-check results plus a
+  `"strict"` field saying which gate policy ran.
+- `round_<N>/report.json` (`ceb.round.report/v1`) — mode, `strict_gate`,
+  `eval_pack`, `openings_used`, per-opponent totals, faults, score.
 - `round_<N>/match_vs_<Opponent>.json` (`ceb.match.report/v1`) — every game's
-  full UCI move list, result, termination reason, fault, and final FEN.
-- `round_<N>/games_vs_<Opponent>.txt` — PGN-like games in UCI movetext.
-- `round_<N>/feedback.json` (`ceb.round.feedback/v1`) — the sanitized
-  aggregate feedback shown to the agent.
+  full UCI move list, opening id, result, termination reason, final FEN.
+- `round_<N>/feedback.json` (`ceb.round.feedback/v1`) — sanitized aggregates
+  shown to the agent (no FENs, moves, or opening ids).
 
-Since move lists and seeds (derivable as `base_seed + game_index`) are stored,
-any game can be replayed and re-validated with the internal oracle
-(`bench/ceb/chess/`).
+Since move lists, opening ids, and seeds (derivable as `base_seed +
+game_index`) are stored, any game can be replayed and re-validated with the
+internal oracle (`bench/ceb/chess/`).
 
 ### Config-driven parameters
 
-Gate and round parameters live in version-controlled files, not code:
-`tracks/a_from_scratch/public/gate_config.yaml` (timeouts, movetimes, mini
-match), `tracks/a_from_scratch/scoring.yaml` (round modes, opponent ratings,
-penalties), and `tracks/a_from_scratch/track.yaml` (official round budget).
-Identical configs plus identical seeds means identical evaluation conditions.
+Gate and round parameters live in version-controlled files:
+`tracks/a_from_scratch/public/gate_config.yaml`,
+`tracks/a_from_scratch/scoring.yaml` (round modes, opening limits, opponent
+and anchor ratings, penalties), and `tracks/a_from_scratch/track.yaml`
+(official round budget). Identical configs plus identical seeds and pack
+means identical evaluation conditions.
+
+### CI as a cross-version check
+
+`.github/workflows/ci.yml` runs the full pipeline — tests, doctor, public and
+strict gate, a prepared-workspace quick round (asserting
+`runs/ci_smoke/round_1/report.json` exists), leaderboard in both modes — on
+Python 3.10/3.11/3.12 for every push and PR, so the evaluation pipeline is
+continuously checked across supported interpreters. CI uses no Stockfish and
+no Docker.
 
 ## Re-running an identical quick round
 
@@ -72,42 +111,38 @@ one to check stability:
 
     ceb workspace prepare --track A --run-id demo
     # put your engine in runs/demo/workspace, then:
-    ceb round run --track A --workspace runs/demo/workspace --round 1 --quick --run-id demo
+    ceb round run --track A --workspace runs/demo/workspace --round 1 --quick
     cp runs/demo/round_1/match_vs_BenchRandom.json /tmp/first.json
-    ceb round run --track A --workspace runs/demo/workspace --round 1 --quick --run-id demo
+    ceb round run --track A --workspace runs/demo/workspace --round 1 --quick
     diff /tmp/first.json runs/demo/round_1/match_vs_BenchRandom.json
 
-Same round number means same `base_seed` (1000), same opponents, same game
-count, same movetime. Note that re-running a round number **overwrites** the
-`round_<N>/` artifacts and appends a new entry to `state.json` — copy reports
-first if you want to compare. Expect identical move lists only within the
-caveats below.
+The run id `demo` is inferred from the `runs/demo/workspace` layout
+(`default_run_id`); `--run-id` overrides. Same round number means same
+`base_seed` (1000), same opponents, same openings, same movetime. Re-running
+a round number **overwrites** `round_<N>/` artifacts and appends to
+`state.json` — copy reports first. Expect identical move lists only within
+the caveats below (`elapsed_s` always differs).
 
 ## Honest caveats
 
-- **Movetime timing is wall-clock.** Games run under `go movetime`, so any
-  engine whose search depth depends on elapsed time can pick different moves
-  under different machine load. This is inherent to time-based play.
-- **The stronger opponents are time-bounded too.** `BenchRandom` and
-  `BenchGreedyCapture` are fully deterministic given a seed. The depth-based
-  opponents (`BenchMaterial1`, `BenchPST1`, `BenchMiniMax2`, `BenchAlphaBeta3`)
-  use iterative deepening against a deadline (80% of movetime), so on a slow
-  or loaded machine an iteration may not complete and the chosen move can
-  differ even with the same seed.
+- **Movetime timing is wall-clock.** Any engine whose search depth depends on
+  elapsed time can pick different moves under different machine load.
+- **Depth-based opponents are time-bounded too.** `BenchRandom` and
+  `BenchGreedyCapture` are fully deterministic given a seed; the others use
+  iterative deepening against a deadline, so a loaded machine can change the
+  chosen move even with the same seed. The same applies to optional anchor
+  engines (Stockfish at `UCI_Elo` levels) when enabled.
 - **Candidate engines may be nondeterministic.** Nothing forces a submission
-  to honor the `Seed` option; engines with threads, hash tables, or their own
-  timing logic can vary run to run.
-- **Timeout and fault boundaries are timing-sensitive.** An engine answering
-  near `movetime + grace_ms` may be a timeout fault on one run and not the
-  next.
-- **No environment pinning.** v0.1 runs on the host (Docker sandboxing is
-  recommended in docs but not implemented), so compiler, libc, and Python
-  versions are whatever the machine has.
+  to honor `Seed`; threads, hash tables, or own timing logic can vary runs.
+- **Timeout and fault boundaries are timing-sensitive** near
+  `movetime + grace_ms`.
+- **Environment pinning is partial.** `--sandbox docker` runs evaluations in
+  the `chess-en-bench-evaluator:0.2` image (`python:3.12-slim` base), which
+  fixes the Python runtime — but the base tag is not digest-pinned, so
+  rebuilds on different days can differ, and host execution (the default)
+  uses whatever the machine has.
 
-## Planned (not in v0.1)
+## Planned (not implemented)
 
-Automated Track B candidate-vs-baseline match orchestration. Today Track B
-ships the pinned baseline, the diff whitelist checker (`ceb track-b
-check-diff`), `ceb track-b status`, and the delta-Elo scoring module
-(`ceb.score.track_b/v1`); reproducible Track B match replay will arrive with
-the orchestration.
+A fastchess/cutechess adapter for external match orchestration. All match
+play today goes through the internal runner described above.

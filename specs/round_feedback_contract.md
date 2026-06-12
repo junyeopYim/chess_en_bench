@@ -1,8 +1,14 @@
-# Round Feedback Contract — `ceb.round.feedback/v1`
+# Round Feedback Contract
 
-This is the only round-result document intended for the submitting agent.
-It is produced by `make_feedback()` in `bench/ceb/rounds/feedback.py`, called
-at the end of every round by `run_round()` in `bench/ceb/rounds/round_runner.py`,
+Feedback documents are the only round results intended for the submitting
+agent. There are two schemas: `ceb.round.feedback/v1` (Track A) and
+`ceb.track_b.feedback/v1` (Track B). Both are aggregate-only; full detail
+stays in operator artifacts.
+
+## Track A — `ceb.round.feedback/v1`
+
+Produced by `make_feedback()` in `bench/ceb/rounds/feedback.py`, called at
+the end of every round by `run_round()` in `bench/ceb/rounds/round_runner.py`,
 and written to `runs/<run_id>/round_<N>/feedback.json`. The same content is
 rendered as text by `feedback_to_text()` and printed by `ceb round run`.
 
@@ -13,13 +19,13 @@ ceb round run --track A --workspace <dir> --round 1 --quick
 cat runs/<run_id>/round_1/feedback.json
 ```
 
-## Fields
+### Fields
 
 | Field | Type | Meaning |
 |---|---|---|
 | `schema` | string | Constant `"ceb.round.feedback/v1"`. |
 | `round` | integer | Round number, as passed to `ceb round run --round N`. |
-| `mode` | string | `"quick"` (free smoke round) or `"official"` (consumes budget). |
+| `mode` | string | `"quick"` (free smoke round) or `"official"` (consumes budget; runs the strict gate). |
 | `per_opponent` | array of objects | One entry per opponent, in the order matches were played. See below. |
 | `faults` | object | Candidate fault totals across all matches in the round: `{"illegal": int, "timeout": int, "crash": int}`. |
 | `penalty_points` | number | `illegal*30 + timeout*15 + crash*25` (weights from `tracks/a_from_scratch/scoring.yaml`). |
@@ -41,29 +47,59 @@ The feedback is a strict subset of the full round report's `score` block
 the per-opponent `opponent_rating`, `delta_elo`, and `performance` fields, but
 all of those are recomputable from `score_rate` and the public formulas in
 `bench/ceb/scoring/elo.py` — nothing in the feedback depends on secrets.
+Everything in the document is derived from `round_report["score"]` plus the
+round number and mode — no other inputs.
 
-## Sanitization guarantees
+## Track B — `ceb.track_b.feedback/v1`
+
+Produced by `make_track_b_feedback()` in `bench/ceb/track_b/round_runner.py`,
+written to `runs/<run_id>/track_b_round_<N>/feedback.json` by
+`ceb track-b round run`. All counts are from the candidate's perspective.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schema` | string | Constant `"ceb.track_b.feedback/v1"`. |
+| `round` | integer | Round number. |
+| `games` | integer | Games scored (`wins + draws + losses`). |
+| `wins`, `draws`, `losses` | integer | Totals vs the baseline engine. |
+| `faults` | object | `{"illegal": int, "timeout": int, "crash": int}` candidate fault totals. |
+| `delta_elo` | number or null | Elo difference implied by the clamped score rate (`bench/ceb/scoring/elo.py`), rounded to 1 decimal. Null when `games == 0`. |
+| `delta_elo_ci95` | `[lo, hi]` or null | 95% confidence interval for `delta_elo` (normal approximation on the mean per-game score, mapped to Elo). |
+| `penalty_points` | number | `illegal*30 + timeout*15 + crash*25`. |
+| `final_delta_elo` | number or null | `delta_elo - penalty_points`, rounded to 1 decimal. The round's Track B score. |
+| `openings_used` | integer | COUNT of distinct openings played — a number, never the opening ids. |
+
+Apart from `openings_used` (a length, not a list), everything is a subset of
+the report's `score` block (`ceb.score.track_b/v1`, computed in
+`bench/ceb/scoring/track_b.py`) plus the round number.
+
+## Sanitization guarantees (both tracks)
 
 Feedback is aggregate-only by design, so agents can iterate between rounds
 without the evaluation channel leaking anything they do not already have:
 
 - No move logs: no PGN, no UCI movetext, no individual game records, and no
-  per-game results — only W/D/L totals per opponent.
+  per-game results — only W/D/L totals.
 - No positions: no FENs, no opening lines, no test positions of any kind.
-- No hidden data: nothing sourced from `tracks/*/private/` ever appears here.
-- `advice` strings are fixed templates triggered solely by the `illegal`,
-  `timeout`, and `crash` counters; they never echo game or position content.
-- Everything in the document is derived from `round_report["score"]` plus the
-  round number and mode — no other inputs.
+- No hidden eval data: when a private eval pack is loaded (`--eval-pack` /
+  `CEB_PRIVATE_EVAL_DIR`, see `bench/ceb/eval_pack.py`), no hidden FEN,
+  move, or opening id appears in any agent-facing feedback. The full round
+  report records `openings_used` ids and the `eval_pack` description, but
+  those are operator artifacts; feedback carries at most an opening COUNT
+  (Track B) or nothing about openings at all (Track A). Gate failure
+  details likewise quote row ids only, never raw FENs.
+- `advice` strings (Track A) are fixed templates triggered solely by the
+  `illegal`, `timeout`, and `crash` counters; they never echo game or
+  position content.
 
-Honest caveat for v0.1: this is a local MVP, so the full round report
-(`report.json`), per-match reports (`match_vs_<Opponent>.json`), and game
-movetext files (`games_vs_<Opponent>.txt`) are written to the same
-`runs/<run_id>/round_<N>/` directory on local disk. The contract defines what
-an agent-facing harness returns to the agent; in a hosted deployment only
-`feedback.json` would cross that boundary.
+Honest caveat: this is a local harness, so the operator artifacts — the full
+round report (`report.json`), per-match reports (`match_vs_<Opponent>.json`
+or `match.json`), and game movetext files (`games_vs_<Opponent>.txt` or
+`games.txt`) — are written to the same `runs/<run_id>/` subtree on local
+disk. The contract defines what an agent-facing harness returns to the
+agent; in a hosted deployment only `feedback.json` crosses that boundary.
 
-## Example payload
+## Example payload (Track A)
 
 A plausible official round (4 games per opponent, so `eps = 0.1`; the two 4-0
 sweeps are clamped from 1.0 to 0.9):

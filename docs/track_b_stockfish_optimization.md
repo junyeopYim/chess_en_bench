@@ -29,18 +29,9 @@ cd third_party/stockfish/src && make -j build   # needs make + a C++17 compiler
 ```
 
 The script refuses to continue if HEAD does not match the pinned commit.
-
-`ceb track-b status` output before setup (real example):
-
-```
-Track B baseline status
-  pinned release : Stockfish 18 (tag sf_18, commit cb3d4ee)
-  sources        : /path/to/chess_en_bench/third_party/stockfish (absent)
-  -> Stockfish sources not found. Run: bash scripts/setup_stockfish.sh
-```
-
-After setup it reports the HEAD commit, whether it matches the lock, and a
-ready/next-step action line (schema `ceb.track_b.status/v1` internally).
+After setup, `ceb track-b status` reports the HEAD commit, whether it matches
+the lock, and a ready/next-step action line (schema `ceb.track_b.status/v1`
+internally).
 
 ## Diff whitelist policy
 
@@ -63,44 +54,65 @@ Three files in `tracks/b_stockfish_opt/` define what a candidate may change:
 The checker (`bench/ceb/track_b/diff_policy.py`) compares the two trees by
 SHA-256 content hash (skipping `.git` and similar), classifies every
 added/removed/modified file, and fails on any change that matches a forbidden
-pattern or is not covered by the whitelist. Note the operative enforcement is
-the pattern check itself; `max_changed_files` in `patch_policy.yaml` is
-implied by the 9-entry whitelist, not a separately coded limit.
+pattern or is not covered by the whitelist. The standalone command is
+`ceb track-b check-diff --baseline <dir> --candidate <dir>` (exit 0 on pass,
+2 on violations; report schema `ceb.track_b.diff_check/v1`; `--allowed` /
+`--forbidden` override the pattern files, mainly for tests).
 
-## Checking a candidate
+## Automated rounds: `ceb track-b round run`
+
+A round plays the candidate build against the baseline build and writes a
+scored report:
 
 ```bash
-ceb track-b check-diff \
-  --baseline third_party/stockfish \
-  --candidate /path/to/candidate
+ceb track-b round run \
+  --candidate-engine /path/to/candidate/src/stockfish \
+  --baseline-engine third_party/stockfish/src/stockfish \
+  --baseline-src third_party/stockfish \
+  --candidate-src /path/to/candidate
 ```
 
-Exit code 0 on pass, 2 on violations. Example failing report
-(schema `ceb.track_b.diff_check/v1`):
+Flags: `--round N` (default 1), `--run-id ID` (default `track_b_local`),
+`--games N` (default 8), `--movetime MS` (default 100), `--max-plies N`
+(default 300), `--openings-limit N`, `--eval-pack DIR`, `--runs-dir DIR`.
+An engine spec is either an executable path or a benchmark opponent name
+(`BenchRandom` … `BenchAlphaBeta3`) — the names exist for testing only.
 
-```json
-{
-  "schema": "ceb.track_b.diff_check/v1",
-  "baseline": "third_party/stockfish",
-  "candidate": "/path/to/candidate",
-  "changed_total": 2,
-  "allowed_changes": [
-    {"path": "src/search.cpp", "change": "modified"}
-  ],
-  "violations": [
-    {"path": "src/evaluate.cpp", "change": "modified",
-     "reason": "matches forbidden pattern"}
-  ],
-  "passed": false
-}
-```
+The runner (`bench/ceb/track_b/round_runner.py`) executes strictly in order:
 
-`--allowed` / `--forbidden` can override the pattern files (mainly for tests).
+1. **Diff whitelist check** — runs when `--baseline-src`/`--candidate-src`
+   are given (both required together). Any violation aborts the round
+   **before a single game is played** (exit 2; the diff report is attached).
+2. **UCI handshake verification** for both engines; a failed handshake also
+   aborts before play.
+3. **Paired-opening, alternating-color games**: openings are cycled in pairs
+   so the candidate plays each opening once as white and once as black
+   (`ceil(games/2)` pairs). `Threads=1` and `Hash=16` are sent to **both**
+   engines.
+4. **Scoring** via `compute_delta_elo_report`, then artifacts under
+   `runs/<run-id>/track_b_round_<n>/`: `report.json`
+   (`ceb.track_b.round.report/v1` — engine ids, UCI options, `openings_used`
+   ids, `eval_pack`, `diff_check`, totals, faults, score), full `match.json`
+   and `games.txt` for the operator, and a sanitized `feedback.json`
+   (`ceb.track_b.feedback/v1` — aggregates only: W/D/L, faults, delta Elo
+   with CI, penalties, and an openings *count*; no moves or game logs).
 
-## Delta-Elo evaluation model
+Openings come from a mounted private eval pack when present (`--eval-pack`
+or, since rounds count as official evaluation, `CEB_PRIVATE_EVAL_DIR`);
+otherwise from `tracks/b_stockfish_opt/public/quick_openings.jsonl`
+(4 validated openings; the `.pgn` file is kept for human readers only);
+otherwise from the Track A public suite.
 
-Candidate and baseline play a match; W/D/L feeds `ceb.scoring.track_b`
-(schema `ceb.score.track_b/v1`), built on `ceb.scoring.elo`:
+**Fixed conditions for real evaluations:** both engines must be builds of the
+pinned Stockfish 18 (`sf_18` / `cb3d4ee`) with identical compiler flags,
+`Threads=1`, fixed `Hash`, and no Syzygy tablebases. The runner enforces the
+UCI options; the build provenance is documented policy, **not** enforced by
+code — the runner plays whatever executables it is given.
+
+## Delta-Elo scoring model
+
+W/D/L feeds `ceb.scoring.track_b` (schema `ceb.score.track_b/v1`), built on
+`ceb.scoring.elo`:
 
 - `score_rate = (W + 0.5*D) / games`, clamped into (0,1) by
   `eps = 1 / (2*(games+1))`
@@ -109,35 +121,26 @@ Candidate and baseline play a match; W/D/L feeds `ceb.scoring.track_b`
 - penalties per candidate fault: illegal_move 30, timeout 15, crash 25
   Elo points; `final_delta_elo = delta_elo - penalty_points`
 
-Reference match parameters for local quick evaluation live in
-`tracks/b_stockfish_opt/public/quick_eval_config.yaml` (20 games, 100 ms per
-move, max 300 plies, alternating colors, openings from
-`public/quick_openings.pgn`). Per `tracks/b_stockfish_opt/track.yaml`, a run
-has 3 official rounds.
+Per `tracks/b_stockfish_opt/track.yaml`, a run has 3 official rounds.
+`tracks/b_stockfish_opt/public/quick_eval_config.yaml` documents reference
+quick-eval parameters; the CLI defaults above are the operative ones.
 
-To score a manually played match:
+## Implemented vs planned
 
-```bash
-python -c "from ceb.scoring.track_b import compute_delta_elo_report as f; \
-import json; print(json.dumps(f(wins=12, draws=5, losses=3), indent=2))"
-```
-
-## Implemented in v0.1 vs planned
-
-Implemented in v0.1:
+Implemented:
 
 - `stockfish.lock` pin + `scripts/setup_stockfish.sh` with commit verification
-- `ceb track-b status` (baseline/setup status)
-- `ceb track-b check-diff` (content-hash tree diff against the whitelist)
-- `allowed_paths.txt`, `forbidden_paths.txt`, `patch_policy.yaml`
-- delta-Elo scoring module with CI and fault penalties
-- public quick-eval reference config and openings
+- `ceb track-b status`, `ceb track-b check-diff`
+- `ceb track-b round run` — automated candidate-vs-baseline rounds with the
+  abort-before-games diff check, handshake verification, paired openings,
+  fixed UCI options, delta-Elo scoring, and sanitized feedback
+- hidden opening packs via the shared eval-pack loader (`--eval-pack` /
+  `CEB_PRIVATE_EVAL_DIR`); no hidden data is shipped in this repository
 
-Planned, **not** in v0.1:
+Planned / operator responsibility:
 
-- automated candidate-vs-baseline match orchestration (`ceb round run`
-  currently serves Track A only; Track B matches must be run manually or with
-  an external runner such as fastchess/cutechess, then scored as above)
-- hidden official evaluation configs/openings — v0.1 is a local MVP with no
-  hidden data; `tracks/*/private/` exists only as a documented placeholder
-- fastchess/cutechess adapters and Docker sandboxing for engine processes
+- building the pinned baseline and a flag-identical candidate build is a
+  manual operator step, not automated by the runner
+- fastchess/cutechess adapters
+- an aggregated Track B leaderboard (the leaderboard command serves Track A;
+  Track B round reports are per-run artifacts only)

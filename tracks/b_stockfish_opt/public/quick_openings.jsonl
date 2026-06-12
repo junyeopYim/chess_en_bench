@@ -1,0 +1,4 @@
+{"id": "b_italian", "fen": "startpos", "moves": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4", "f8c5"], "tags": ["open"]}
+{"id": "b_najdorf_setup", "fen": "startpos", "moves": ["e2e4", "c7c5", "g1f3", "d7d6", "d2d4", "c5d4", "f3d4", "g8f6"], "tags": ["sicilian"]}
+{"id": "b_qgd", "fen": "startpos", "moves": ["d2d4", "d7d5", "c2c4", "e7e6", "b1c3", "g8f6"], "tags": ["closed"]}
+{"id": "b_caro_advance", "fen": "startpos", "moves": ["e2e4", "c7c6", "d2d4", "d7d5", "e4e5", "c8f5"], "tags": ["caro-kann"]}

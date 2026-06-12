@@ -1,0 +1,8 @@
+{"id": "startpos", "fen": "startpos", "moves": [], "tags": ["basic"]}
+{"id": "italian_001", "fen": "startpos", "moves": ["e2e4", "e7e5", "g1f3", "b8c6", "f1c4"], "tags": ["open"]}
+{"id": "sicilian_001", "fen": "startpos", "moves": ["e2e4", "c7c5", "g1f3", "d7d6"], "tags": ["semi-open"]}
+{"id": "qgd_001", "fen": "startpos", "moves": ["d2d4", "d7d5", "c2c4", "e7e6"], "tags": ["closed"]}
+{"id": "french_001", "fen": "startpos", "moves": ["e2e4", "e7e6", "d2d4", "d7d5"], "tags": ["semi-open"]}
+{"id": "kid_001", "fen": "startpos", "moves": ["d2d4", "g8f6", "c2c4", "g7g6"], "tags": ["indian"]}
+{"id": "ruy_001", "fen": "startpos", "moves": ["e2e4", "e7e5", "g1f3", "b8c6", "f1b5"], "tags": ["open"]}
+{"id": "caro_001", "fen": "startpos", "moves": ["e2e4", "c7c6", "d2d4", "d7d5"], "tags": ["semi-open"]}

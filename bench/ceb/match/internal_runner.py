@@ -29,10 +29,14 @@ def _loss_for(side_white):
 
 def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
               max_plies=200, grace_ms=3000, white_name="white",
-              black_name="black", seed=None, cwds=(None, None)):
+              black_name="black", seed=None, cwds=(None, None),
+              white_options=None, black_options=None):
     """Play one game. Returns a dict game record.
 
     cwds: (white_cwd, black_cwd) working directories for the two processes.
+    white_options/black_options: extra UCI options sent via 'setoption'
+    before the game (e.g. limited-strength anchor settings); engines that
+    do not know an option simply ignore it.
     """
     record = {
         "white": white_name,
@@ -74,10 +78,13 @@ def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
             fault(False, FAULT_CRASH, "black failed to start: %s" % exc)
             return record
 
-        if seed is not None:
-            for client in (white, black):
+        for client, options in ((white, white_options), (black, black_options)):
+            pending = dict(options or {})
+            if seed is not None:
+                pending.setdefault("Seed", seed)
+            for name, value in pending.items():
                 try:
-                    client.send("setoption name Seed value %d" % seed)
+                    client.send("setoption name %s value %s" % (name, value))
                 except EngineError:
                     pass
 
@@ -132,10 +139,21 @@ def play_game(white_cmd, black_cmd, *, start_fen=START_FEN, movetime_ms=100,
 def play_match(candidate_cmd, opponent_cmd, *, games=2, movetime_ms=100,
                max_plies=200, grace_ms=3000, candidate_name="candidate",
                opponent_name="opponent", start_fens=None, base_seed=1,
-               candidate_cwd=None, games_text_path=None):
+               candidate_cwd=None, games_text_path=None, openings=None,
+               opponent_uci_options=None, candidate_uci_options=None):
     """Alternating-color match. Returns a JSON-serializable match report
-    with results from the candidate's perspective."""
-    start_fens = list(start_fens or [START_FEN])
+    with results from the candidate's perspective.
+
+    openings: list of {"id", "start_fen"} dicts; consecutive game pairs use
+    the same opening with colors swapped, so each opening is played by the
+    candidate as both white and black. Overrides start_fens when given.
+    """
+    if openings:
+        start_fens = [o["start_fen"] for o in openings]
+        opening_ids = [o["id"] for o in openings]
+    else:
+        start_fens = list(start_fens or [START_FEN])
+        opening_ids = [None] * len(start_fens)
     report = {
         "schema": "ceb.match.report/v1",
         "candidate": candidate_name,
@@ -143,6 +161,7 @@ def play_match(candidate_cmd, opponent_cmd, *, games=2, movetime_ms=100,
         "games_planned": games,
         "movetime_ms": movetime_ms,
         "max_plies": max_plies,
+        "openings": [oid for oid in opening_ids if oid is not None],
         "games": [],
         "totals": {"wins": 0, "draws": 0, "losses": 0},
         "candidate_faults": {FAULT_ILLEGAL: 0, FAULT_TIMEOUT: 0, FAULT_CRASH: 0},
@@ -154,20 +173,26 @@ def play_match(candidate_cmd, opponent_cmd, *, games=2, movetime_ms=100,
 
     for i in range(games):
         candidate_white = i % 2 == 0
-        start_fen = start_fens[(i // 2) % len(start_fens)]
+        pair = (i // 2) % len(start_fens)
+        start_fen = start_fens[pair]
         if candidate_white:
             rec = play_game(candidate_cmd, opponent_cmd, start_fen=start_fen,
                             movetime_ms=movetime_ms, max_plies=max_plies,
                             grace_ms=grace_ms, white_name=candidate_name,
                             black_name=opponent_name, seed=base_seed + i,
-                            cwds=(candidate_cwd, None))
+                            cwds=(candidate_cwd, None),
+                            white_options=candidate_uci_options,
+                            black_options=opponent_uci_options)
         else:
             rec = play_game(opponent_cmd, candidate_cmd, start_fen=start_fen,
                             movetime_ms=movetime_ms, max_plies=max_plies,
                             grace_ms=grace_ms, white_name=opponent_name,
                             black_name=candidate_name, seed=base_seed + i,
-                            cwds=(None, candidate_cwd))
+                            cwds=(None, candidate_cwd),
+                            white_options=opponent_uci_options,
+                            black_options=candidate_uci_options)
         rec["candidate_color"] = "white" if candidate_white else "black"
+        rec["opening_id"] = opening_ids[pair]
         report["games"].append(rec)
 
         if rec["result"] == RESULT_DRAW:
